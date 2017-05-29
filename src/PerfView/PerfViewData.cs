@@ -6,6 +6,7 @@ using Microsoft.Diagnostics.Tracing;
 using Microsoft.Diagnostics.Tracing.Etlx;
 using Microsoft.Diagnostics.Tracing.Parsers;
 using Microsoft.Diagnostics.Tracing.Parsers.AspNet;
+using Microsoft.Diagnostics.Tracing.Parsers.IIS_Trace;
 using Microsoft.Diagnostics.Tracing.Parsers.Clr;
 using Microsoft.Diagnostics.Tracing.Parsers.ClrPrivate;
 using Microsoft.Diagnostics.Tracing.Parsers.ETWClrProfiler;
@@ -1305,6 +1306,91 @@ table {
         /// </summary>
         private List<TraceProcess> m_processes;
         #endregion
+    }
+
+    public class PerfViewIisStats : PerfViewHtmlReport
+    {
+        public PerfViewIisStats(PerfViewFile dataFile) : base(dataFile, "IIS Stats") { }
+
+        protected override void WriteHtmlBody(TraceLog dataFile, TextWriter writer, string fileName, TextWriter log)
+        {
+            writer.WriteLine("<H2>IIS Request Statistics</H2>");
+            var dispatcher = dataFile.Events.GetSource();
+
+            var iis = new IisTraceEventParser(dispatcher);
+
+            List<IISRequest> m_Requests = new List<IISRequest>();
+
+            var requestByID = new Dictionary<Guid, IISRequest>();
+
+            int startcount = 0;
+            int endcount = 0;
+
+            iis.IIS_TransStart += delegate (W3GeneralStartNewRequest request)
+            {
+                IISRequest req = new IISRequest();
+                req.ContextId = request.ContextId;
+                req.StartTime = request.TimeStamp;
+                req.Method = request.RequestVerb;
+                req.Path = request.RequestURL;
+                req.EndTime = DateTime.MinValue;
+                //m_Requests.Add(req);
+                requestByID.Add(request.ContextId, req);
+                startcount++;
+                //iisInfo.AppendLine(string.Format("URL = {0} , CONTEXTID = {1} <br/>", request.RequestURL, request.ContextId));
+            };
+
+            iis.IIS_TransStop += delegate (W3GeneralEndNewRequest req)
+            {
+                IISRequest request;
+                if (requestByID.TryGetValue(req.ContextId, out request))
+                {
+                    request.EndTime = req.TimeStamp;
+                }
+
+                endcount++;
+            };
+
+            //iis.IISModuleEventsStart += delegate (IISModuleEventsModuleStart moduleEvent)
+            //{
+            //    moduleEvent.ModuleName
+            //};
+
+            dispatcher.Process();
+
+            writer.WriteLine("Requests Processed = " + m_Requests.Count);
+            writer.WriteLine("Requests Started = " + startcount);
+            writer.WriteLine("Requests End = " + endcount);
+
+            writer.WriteLine("<Table Border=\"1\">");
+            writer.Write("<TR>");
+            writer.Write("<TH Align=\"Center\">Method</TH>");
+            writer.Write("<TH Align=\"Center\">Path</TH>");
+            writer.Write("<TH Align=\"Center\">Duration</TH>");
+            writer.Write("<TH Align=\"Center\">ContextId</TH>");
+            writer.WriteLine("</TR>");
+
+            foreach (var request in requestByID.Values.Where(x => x.EndTime != DateTime.MinValue).OrderByDescending(m => m.EndTime - m.StartTime))
+            {
+                writer.WriteLine("<TR>");
+                writer.WriteLine(string.Format("<TD>{0}</TD><TD>{1}</TD><TD>{2}</TD><TD>{3}</TD>", request.Method, request.Path, (request.EndTime - request.StartTime).TotalMilliseconds, request.ContextId));
+                writer.Write("</TR>");
+            }
+            writer.WriteLine("</TABLE>");
+            writer.Flush();
+        }
+
+
+
+        class IISRequest
+        {
+            public string Method;       // GET or POST
+            public string Path;         // url path
+            public string QueryString;  // Query 
+            public Guid ContextId;
+            public DateTime StartTime;
+            public DateTime EndTime;
+        }
     }
 
     public class PerfViewAspNetStats : PerfViewHtmlReport
@@ -4876,6 +4962,7 @@ table {
             bool hasExceptions = false;
             bool hasManagedLoads = false;
             bool hasAspNet = false;
+            bool hasIis = false;
             bool hasDiskStacks = false;
             bool hasAnyStacks = false;
             bool hasVirtAllocStacks = false;
@@ -4903,6 +4990,8 @@ table {
                     hasCPUStacks = true;                // Even without true stacks we can display something in the stack viewer.  
                 if (!hasAspNet && name.StartsWith("AspNetReq"))
                     hasAspNet = true;
+                if (!hasIis && name.StartsWith("IIS"))
+                    hasIis = true;
                 if (counts.ProviderGuid == ApplicationServerTraceEventParser.ProviderGuid)
                     hasWCFRequests = true;
                 if (name.StartsWith("JSDumpHeapEnvelope"))
@@ -5054,6 +5143,10 @@ table {
                 {
                     obsolete.Children.Add(new PerfViewStackSource(this, "Server Request Managed Allocation"));
                 }
+            }
+            if (hasIis)
+            {
+                advanced.Children.Add(new PerfViewIisStats(this));
             }
 
             if (hasAnyStacks)
