@@ -1319,46 +1319,91 @@ table {
 
             var iis = new IisTraceEventParser(dispatcher);
 
-            List<IISRequest> m_Requests = new List<IISRequest>();
-
             var requestByID = new Dictionary<Guid, IISRequest>();
+
+            var requestByIDModuleEvents = new Dictionary<Guid, List<IISModuleEvent>>();
 
             int startcount = 0;
             int endcount = 0;
+            int kuduRequests = 0;
 
             iis.IIS_TransStart += delegate (W3GeneralStartNewRequest request)
             {
-                IISRequest req = new IISRequest();
-                req.ContextId = request.ContextId;
-                req.StartTime = request.TimeStamp;
-                req.Method = request.RequestVerb;
-                req.Path = request.RequestURL;
-                req.EndTime = DateTime.MinValue;
-                //m_Requests.Add(req);
-                requestByID.Add(request.ContextId, req);
-                startcount++;
-                //iisInfo.AppendLine(string.Format("URL = {0} , CONTEXTID = {1} <br/>", request.RequestURL, request.ContextId));
+                if (!request.RequestURL.Contains("://~1"))
+                {
+
+                    IISRequest req = new IISRequest();
+                    req.ContextId = request.ContextId;
+                    req.StartTime = request.TimeStamp;
+                    req.Method = request.RequestVerb;
+                    req.Path = request.RequestURL;
+                    req.EndTime = DateTime.MinValue;
+                    //m_Requests.Add(req);
+                    requestByID.Add(request.ContextId, req);
+                    //iisInfo.AppendLine(string.Format("URL = {0} , CONTEXTID = {1} <br/>", request.RequestURL, request.ContextId));
+                    startcount++;
+                }
+                else
+                {
+                    kuduRequests++;
+                }
+                
+
             };
 
             iis.IIS_TransStop += delegate (W3GeneralEndNewRequest req)
             {
+
                 IISRequest request;
                 if (requestByID.TryGetValue(req.ContextId, out request))
                 {
                     request.EndTime = req.TimeStamp;
                 }
-
                 endcount++;
             };
 
-            //iis.IISModuleEventsStart += delegate (IISModuleEventsModuleStart moduleEvent)
-            //{
-            //    moduleEvent.ModuleName
-            //};
+            iis.IISRequestNotificationEventsStart += delegate (IISRequestNotificationEventsStart moduleEvent)
+            {
+                string eventName = moduleEvent.EventName;
+                List<IISModuleEvent> moduleEvents;
+                if (requestByIDModuleEvents.TryGetValue(moduleEvent.ContextId, out moduleEvents))
+                {
+                    var iisModuleEvent = new IISModuleEvent();
+                    iisModuleEvent.Name = moduleEvent.ModuleName;
+                    iisModuleEvent.ModuleStartTime = moduleEvent.TimeStamp;
+                    iisModuleEvent.Notification = moduleEvent.Notification;
+                    moduleEvents.Add(iisModuleEvent);
+                }
+                else
+                {
+                    List<IISModuleEvent> moduleEventsTemp = new List<IISModuleEvent>();
+                    var iisModuleEvent = new IISModuleEvent();
+                    iisModuleEvent.Name = moduleEvent.ModuleName;
+                    iisModuleEvent.ModuleStartTime= moduleEvent.TimeStamp;
+                    iisModuleEvent.Notification = moduleEvent.Notification;
+                    moduleEventsTemp.Add(iisModuleEvent);
+                    requestByIDModuleEvents.Add(moduleEvent.ContextId, moduleEventsTemp);
+                }
+
+            };
+
+            iis.IISRequestNotificationEventsStop += delegate (IISRequestNotificationEventsEnd moduleEvent)
+            {
+                string eventName = moduleEvent.EventName;
+                List<IISModuleEvent> moduleEvents;
+                if (requestByIDModuleEvents.TryGetValue(moduleEvent.ContextId, out moduleEvents))
+                {
+                    var module = moduleEvents.FirstOrDefault(m => (m.Name == moduleEvent.ModuleName && m.Notification == moduleEvent.Notification));
+                    if (module != null)
+                    {
+                        module.ModuleEndTime = moduleEvent.TimeStamp;
+                    }
+                }
+            };
 
             dispatcher.Process();
 
-            writer.WriteLine("Requests Processed = " + m_Requests.Count);
+            writer.WriteLine("KUDU Requests Excluded = " + kuduRequests);
             writer.WriteLine("Requests Started = " + startcount);
             writer.WriteLine("Requests End = " + endcount);
 
@@ -1366,21 +1411,62 @@ table {
             writer.Write("<TR>");
             writer.Write("<TH Align=\"Center\">Method</TH>");
             writer.Write("<TH Align=\"Center\">Path</TH>");
-            writer.Write("<TH Align=\"Center\">Duration</TH>");
+            writer.Write("<TH Align=\"Center\">Duration(ms)</TH>");
             writer.Write("<TH Align=\"Center\">ContextId</TH>");
+            writer.Write("<TH Align=\"Center\">SlowestModule</TH>");
+            writer.Write("<TH Align=\"Center\">TimeSpentInSlowestModule</TH>");
+            writer.Write("<TH Align=\"Center\">%TimeSpentInSlowestModule</TH>");
             writer.WriteLine("</TR>");
 
             foreach (var request in requestByID.Values.Where(x => x.EndTime != DateTime.MinValue).OrderByDescending(m => m.EndTime - m.StartTime))
             {
                 writer.WriteLine("<TR>");
-                writer.WriteLine(string.Format("<TD>{0}</TD><TD>{1}</TD><TD>{2}</TD><TD>{3}</TD>", request.Method, request.Path, (request.EndTime - request.StartTime).TotalMilliseconds, request.ContextId));
+
+                string slowestModule = "";
+                double slowestTime = 0;
+
+                List <IISModuleEvent> moduleEvents;
+                if (requestByIDModuleEvents.TryGetValue(request.ContextId, out moduleEvents))
+                {
+                    
+                    slowestModule = GetSlowestModule(request.ContextId, moduleEvents, out slowestTime);
+                }
+                double totalTimeSpent = (request.EndTime - request.StartTime).TotalMilliseconds;
+                writer.WriteLine(string.Format("<TD>{0}</TD><TD>{1}</TD><TD>{2}</TD><TD>{3}</TD><TD>{4}</TD><TD>{5}</TD><TD>{6:0.00}%</TD>", request.Method, request.Path, totalTimeSpent, request.ContextId, slowestModule, slowestTime, (slowestTime/totalTimeSpent*100)));
                 writer.Write("</TR>");
             }
             writer.WriteLine("</TABLE>");
             writer.Flush();
         }
 
+        private string GetSlowestModule(Guid contextId, List<IISModuleEvent> moduleEvents, out double slowestTime)
+        {
+            string ModuleName = string.Empty;
+            slowestTime = 0;
 
+            foreach (var module in moduleEvents)
+            {
+                if (module.ModuleStartTime !=DateTime.MinValue && module.ModuleEndTime !=DateTime.MinValue)
+                {
+                    var timeInThisModule = module.ModuleEndTime.Subtract(module.ModuleStartTime).TotalMilliseconds;
+                    if (timeInThisModule > slowestTime)
+                    {
+                        slowestTime = timeInThisModule;
+                        ModuleName = module.Name;
+                    }
+                }
+            }
+
+            return ModuleName;
+        }
+
+        class IISModuleEvent
+        {
+            public string Name;
+            public DateTime ModuleStartTime;
+            public DateTime ModuleEndTime;
+            public int Notification;
+        }
 
         class IISRequest
         {
