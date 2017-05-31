@@ -501,7 +501,6 @@ namespace PerfView
                 }
 
                 m_args.DumpHeap = HeapSnapshotCheckBox.IsChecked ?? false;
-                m_args.Finalizers = FinalizersCheckBox.IsChecked ?? false;
 
                 if (providers.Length > 0)
                     m_args.Providers = providers.Split(',');
@@ -525,8 +524,7 @@ namespace PerfView
                         {
                             m_timer.IsEnabled = false;
                             Hide();
-                            if (m_continuation != null)
-                                m_continuation();
+                            m_continuation?.Invoke();
                         },
                         delegate
                         {

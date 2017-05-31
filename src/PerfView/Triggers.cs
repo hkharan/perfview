@@ -189,9 +189,11 @@ namespace Triggers
         {
             m_monitoringDone = true;
 
+#if PERFVIEW
             var cmd = m_cmd;
             if (cmd != null)
                 cmd.Kill();
+#endif
         }
         public override string Status
         {
@@ -237,8 +239,7 @@ namespace Triggers
                     m_log.WriteLine("Error: heapdump failed with error code {0}", m_cmd.ExitCode);
                 else
                 {
-                    if (m_triggered != null)
-                        m_triggered(this);
+                    m_triggered?.Invoke(this);
                 }
                 m_cmd = null;
             });
@@ -289,7 +290,9 @@ namespace Triggers
         private bool m_instanceExists;
         private TextWriter m_log;
         public event Action<PerformanceCounterTrigger> m_triggered;
+#if PERFVIEW
         private Utilities.Command m_cmd;
+#endif
 
         private Task m_task;
         private volatile bool m_monitoringDone;

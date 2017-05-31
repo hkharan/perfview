@@ -38,8 +38,7 @@ namespace Diagnostics.Tracing.StackSources
                 writer.WriteStartElement("StackWindow");
                 XmlStackSourceWriter.WriteStacks(source, writer);
 
-                if (additionalData != null)
-                    additionalData(writer);
+                additionalData?.Invoke(writer);
                 writer.WriteEndElement();
             }
         }
@@ -118,7 +117,7 @@ namespace Diagnostics.Tracing.StackSources
         /// it is first Unziped and then processed.  
         /// 
         /// If the file ends in .json or .json.zip it can also read that (using JsonReaderWriterFactory.CreateJsonReader)
-        /// see https://msdn.microsoft.com/en-us/library/bb412170.aspx?f=255&MSPPError=-2147217396 for 
+        /// see https://msdn.microsoft.com/en-us/library/bb412170.aspx?f=255&amp;MSPPError=-2147217396 for 
         /// more on this mapping.  
         /// </summary>
         public XmlStackSource(string fileName, Action<XmlReader> readElement = null)
