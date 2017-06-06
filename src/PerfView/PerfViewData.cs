@@ -1349,6 +1349,12 @@ table {
                 if (requestByID.TryGetValue(req.ContextId, out request))
                 {
                     request.EndTime = req.TimeStamp;
+                    request.BytesReceived = req.BytesReceived;
+                    request.BytesSent = req.BytesSent;
+                    request.StatusCode= req.HttpStatus;
+                    request.SubStatusCode= req.HttpSubStatus;
+                    
+
                 }
                 endcount++;
             };
@@ -1400,13 +1406,17 @@ table {
 
             writer.WriteLine("<Table Border=\"1\">");
             writer.Write("<TR>");
-            writer.Write("<TH Align=\"Center\">Method</TH>");
-            writer.Write("<TH Align=\"Center\">Path</TH>");
-            writer.Write("<TH Align=\"Center\">Duration(ms)</TH>");
-            writer.Write("<TH Align=\"Center\">ContextId</TH>");
-            writer.Write("<TH Align=\"Center\">SlowestModule</TH>");
-            writer.Write("<TH Align=\"Center\">TimeSpentInSlowestModule</TH>");
-            writer.Write("<TH Align=\"Center\">%TimeSpentInSlowestModule</TH>");
+            writer.Write("<TH Align='Center'>Method</TH>");
+            writer.Write("<TH Align='Center'>Path</TH>");
+            writer.Write("<TH Align='Center'>Bytes Recieved (cs-bytes)</TH>");
+            writer.Write("<TH Align='Center'>Bytes Sent (sc-bytes)</TH>");
+            writer.Write("<TH Align='Center'>ContextId</TH>");
+            writer.Write("<TH Align='Center'>StatusCode</TH>");
+            writer.Write("<TH Align='Center'>SubStatusCode</TH>");
+            writer.Write("<TH Align='Center'>Duration(ms)</TH>");
+            writer.Write("<TH Align='Center'>SlowestModule</TH>");
+            writer.Write("<TH Align='Center'>TimeSpentInSlowestModule</TH>");
+            writer.Write("<TH Align='Center'>%TimeSpentInSlowestModule</TH>");
             writer.WriteLine("</TR>");
 
             foreach (var request in requestByID.Values.Where(x => x.EndTime != DateTime.MinValue).OrderByDescending(m => m.EndTime - m.StartTime))
@@ -1423,7 +1433,7 @@ table {
                     slowestModule = GetSlowestModule(request.ContextId, moduleEvents, out slowestTime);
                 }
                 double totalTimeSpent = (request.EndTime - request.StartTime).TotalMilliseconds;
-                writer.WriteLine(string.Format("<TD>{0}</TD><TD>{1}</TD><TD>{2}</TD><TD>{3}</TD><TD>{4}</TD><TD>{5}</TD><TD>{6:0.00}%</TD>", request.Method, request.Path, totalTimeSpent, request.ContextId, slowestModule, slowestTime, (slowestTime/totalTimeSpent*100)));
+                writer.WriteLine($"<TD>{request.Method}</TD><TD>{request.Path}</TD><TD>{request.BytesReceived}</TD><TD>{request.BytesSent}</TD><TD>{request.ContextId}</TD><TD>{request.StatusCode}</TD><TD>{request.SubStatusCode}</TD><TD>{totalTimeSpent}</TD><TD>{slowestModule}</TD><TD>{slowestTime}</TD><TD>{((slowestTime / totalTimeSpent * 100)):0.00}%</TD>");
                 writer.Write("</TR>");
             }
             writer.WriteLine("</TABLE>");
@@ -1467,6 +1477,11 @@ table {
             public Guid ContextId;
             public DateTime StartTime;
             public DateTime EndTime;
+            public int BytesSent;
+            public int BytesReceived;
+            public int StatusCode;
+            public int SubStatusCode;
+            
         }
     }
 
