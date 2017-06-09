@@ -360,6 +360,10 @@ namespace FastSerialization
         protected virtual void Dispose(bool disposing) { }
         #endregion 
         #region private
+
+        /// <summary>
+        /// Makespace makes at least sizeof(long) bytes available (or throws OutOfMemory)
+        /// </summary>
         internal /* protected */ virtual void MakeSpace()
         {
             const int maxLength = 0x7FFFFFC7; // Max array length for byte[]
@@ -368,11 +372,12 @@ namespace FastSerialization
             // Make sure we don't exceed max possible size
             if (bytes.Length < (maxLength / 3) * 2)
                 newLength = (bytes.Length / 2) * 3;
-            else if (bytes.Length < maxLength)
-                newLength = maxLength;
+            else if (bytes.Length < maxLength - sizeof(long))      // Write(long) expects Makespace to make at 8 bytes of space.   
+                newLength = maxLength;                             // If we can do this, use up the last available length 
             else
-                throw new OutOfMemoryException(); // Can't make space anymore
+                throw new OutOfMemoryException();                  // Can't make space anymore
 
+            Debug.Assert(bytes.Length + sizeof(long) <= newLength);
             byte[] newBytes = new byte[newLength];
             Array.Copy(bytes, newBytes, bytes.Length);
             bytes = newBytes;
@@ -557,11 +562,12 @@ namespace FastSerialization
         /// Create a new IOStreamStreamReader from the given System.IO.Stream.   Optionally you can specify the size of the read buffer
         /// The stream will be closed by the IOStreamStreamReader when it is closed.  
         /// </summary>
-        public IOStreamStreamReader(Stream inputStream, int bufferSize = defaultBufferSize)
+        public IOStreamStreamReader(Stream inputStream, int bufferSize = defaultBufferSize, bool leaveOpen = false)
             : base(new byte[bufferSize + align], 0, 0)
         {
             Debug.Assert(bufferSize % align == 0);
             this.inputStream = inputStream;
+            this.leaveOpen = leaveOpen;
         }
 
         /// <summary>
@@ -610,7 +616,11 @@ namespace FastSerialization
         protected override void Dispose(bool disposing)
         {
             if (disposing)
-                inputStream.Dispose();
+            {
+                if (!leaveOpen)
+                    inputStream.Dispose();
+            }
+
             base.Dispose(disposing);
         }
 
@@ -667,6 +677,7 @@ namespace FastSerialization
                 throw new Exception("Read past end of stream.");
         }
         internal /*protected*/  Stream inputStream;
+        private bool leaveOpen;
         internal /*protected*/  uint positionInStream;
         #endregion
     }
@@ -853,13 +864,15 @@ namespace FastSerialization
         /// </summary>
         /// <param name="fileName"></param>
         public IOStreamStreamWriter(string fileName) : this(new FileStream(fileName, FileMode.Create)) { }
+
         /// <summary>
         /// Create a IOStreamStreamWriter that writes its data to a System.IO.Stream
         /// </summary>
-        public IOStreamStreamWriter(Stream outputStream, int bufferSize = defaultBufferSize + sizeof(long))
+        public IOStreamStreamWriter(Stream outputStream, int bufferSize = defaultBufferSize + sizeof(long), bool leaveOpen = false)
             : base(bufferSize)
         {
             this.outputStream = outputStream;
+            this.leaveOpen = leaveOpen;
             streamLength = outputStream.Length;
         }
 
@@ -943,13 +956,15 @@ namespace FastSerialization
             if (disposing)
             {
                 Flush();
-                outputStream.Dispose();
+                if (!leaveOpen)
+                    outputStream.Dispose();
             }
             base.Dispose(disposing);
         }
 
         const int defaultBufferSize = 1024 * 8 - sizeof(long);
         Stream outputStream;
+        bool leaveOpen;
         long streamLength;
 
         #endregion
