@@ -13,6 +13,23 @@ namespace Microsoft.Diagnostics.Tracing.Parsers
 {
     using Microsoft.Diagnostics.Tracing.Parsers.IIS_Trace;
 
+    public enum RequestNotification
+    {
+        AcquireRequestState = 32,
+        AuthenticateRequest = 2,
+        AuthorizeRequest = 4,
+        BeginRequest = 1,
+        EndRequest = 2048,
+        ExecuteRequestHandler = 128,
+        LogRequest = 1024,
+        MapRequestHandler = 16,
+        PreExecuteRequestHandler = 64,
+        ReleaseRequestState = 256,
+        ResolveRequestCache = 8,
+        SendResponse = 536870912,
+        UpdateRequestCache = 512
+    }
+
     [System.CodeDom.Compiler.GeneratedCode("traceparsergen", "2.0")]
     public sealed class IisTraceEventParser : TraceEventParser
     {
@@ -34,6 +51,8 @@ namespace Microsoft.Diagnostics.Tracing.Parsers
         public enum Keywords : long
         {
         };
+
+        
 
         public IisTraceEventParser(TraceEventSource source) : base(source) { }
 
@@ -11738,7 +11757,8 @@ namespace Microsoft.Diagnostics.Tracing.Parsers.IIS_Trace
     public sealed class W3GeneralEndNewRequest : TraceEvent
     {
         public Guid ContextId { get { if (Version >= 1) return GetGuidAt(0); return Guid.Empty; } }
-        public int BytesSent { get { if (Version >= 0) return GetInt32At(8); return GetInt32At(16); } }
+        //public int BytesSent { get { if (Version >= 0) return GetInt32At(8); return GetInt32At(16); } }
+        public int BytesSent { get { if (Version >= 1) return GetInt32At(16); return 0; } }
         public int BytesReceived { get { if (Version >= 1) return GetInt32At(20); return 0; } }
         public int HttpStatus { get { if (Version >= 1) return GetInt32At(24); return 0; } }
         public int HttpSubStatus { get { if (Version >= 1) return GetInt16At(28); return 0; } }

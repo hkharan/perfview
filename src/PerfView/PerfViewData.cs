@@ -1305,7 +1305,7 @@ table {
 
         protected override void WriteHtmlBody(TraceLog dataFile, TextWriter writer, string fileName, TextWriter log)
         {
-            writer.WriteLine("<H2>IIS Request Statistics</H2>");
+            writer.WriteLine("<H2>Top 100 Slowest Request Statistics</H2>");
             var dispatcher = dataFile.Events.GetSource();
 
             var iis = new IisTraceEventParser(dispatcher);
@@ -1330,7 +1330,13 @@ table {
                     req.Path = request.RequestURL;
                     req.EndTime = DateTime.MinValue;
                     //m_Requests.Add(req);
-                    requestByID.Add(request.ContextId, req);
+
+                    if (!requestByID.ContainsKey(request.ContextId))
+                        requestByID.Add(request.ContextId, req);
+                    else
+                    {
+                        var putBreakpoint = 0;
+                    }
                     //iisInfo.AppendLine(string.Format("URL = {0} , CONTEXTID = {1} <br/>", request.RequestURL, request.ContextId));
                     startcount++;
                 }
@@ -1338,7 +1344,7 @@ table {
                 {
                     kuduRequests++;
                 }
-                
+
 
             };
 
@@ -1351,9 +1357,9 @@ table {
                     request.EndTime = req.TimeStamp;
                     request.BytesReceived = req.BytesReceived;
                     request.BytesSent = req.BytesSent;
-                    request.StatusCode= req.HttpStatus;
-                    request.SubStatusCode= req.HttpSubStatus;
-                    
+                    request.StatusCode = req.HttpStatus;
+                    request.SubStatusCode = req.HttpSubStatus;
+
 
                 }
                 endcount++;
@@ -1368,7 +1374,7 @@ table {
                     var iisModuleEvent = new IISModuleEvent();
                     iisModuleEvent.Name = moduleEvent.ModuleName;
                     iisModuleEvent.ModuleStartTime = moduleEvent.TimeStamp;
-                    iisModuleEvent.Notification = moduleEvent.Notification;
+                    iisModuleEvent.Notification = (RequestNotification)moduleEvent.Notification;
                     moduleEvents.Add(iisModuleEvent);
                 }
                 else
@@ -1376,8 +1382,8 @@ table {
                     List<IISModuleEvent> moduleEventsTemp = new List<IISModuleEvent>();
                     var iisModuleEvent = new IISModuleEvent();
                     iisModuleEvent.Name = moduleEvent.ModuleName;
-                    iisModuleEvent.ModuleStartTime= moduleEvent.TimeStamp;
-                    iisModuleEvent.Notification = moduleEvent.Notification;
+                    iisModuleEvent.ModuleStartTime = moduleEvent.TimeStamp;
+                    iisModuleEvent.Notification = (RequestNotification)moduleEvent.Notification;
                     moduleEventsTemp.Add(iisModuleEvent);
                     requestByIDModuleEvents.Add(moduleEvent.ContextId, moduleEventsTemp);
                 }
@@ -1390,12 +1396,29 @@ table {
                 List<IISModuleEvent> moduleEvents;
                 if (requestByIDModuleEvents.TryGetValue(moduleEvent.ContextId, out moduleEvents))
                 {
-                    var module = moduleEvents.FirstOrDefault(m => (m.Name == moduleEvent.ModuleName && m.Notification == moduleEvent.Notification));
+                    var module = moduleEvents.FirstOrDefault(m => (m.Name == moduleEvent.ModuleName && m.Notification == (RequestNotification)moduleEvent.Notification));
                     if (module != null)
                     {
                         module.ModuleEndTime = moduleEvent.TimeStamp;
                     }
                 }
+            };
+
+            iis.IISRequestNotificationEventsOpcode16 += delegate (IISRequestNotificationEventsResponseErrorStatus responseErrorStatusNotification)
+            {
+                IISRequest request;
+                if (requestByID.TryGetValue(responseErrorStatusNotification.ContextId, out request))
+                {
+                    request.FailureDetails = new RequestFailureDetails();
+                    request.FailureDetails.HttpReason = responseErrorStatusNotification.HttpReason;
+                    request.FailureDetails.HttpStatus = responseErrorStatusNotification.HttpStatus;
+                    request.FailureDetails.HttpSubStatus = responseErrorStatusNotification.HttpSubStatus;
+                    request.FailureDetails.ModuleName = responseErrorStatusNotification.ModuleName;
+                    request.FailureDetails.ConfigExceptionInfo= responseErrorStatusNotification.ConfigExceptionInfo;
+                    request.FailureDetails.Notification = (RequestNotification) responseErrorStatusNotification.Notification;
+
+                }
+
             };
 
             dispatcher.Process();
@@ -1414,12 +1437,12 @@ table {
             writer.Write("<TH Align='Center'>StatusCode</TH>");
             writer.Write("<TH Align='Center'>SubStatusCode</TH>");
             writer.Write("<TH Align='Center'>Duration(ms)</TH>");
-            writer.Write("<TH Align='Center'>SlowestModule</TH>");
+            writer.Write("<TH Align='Center'>SlowestModule</TH>");           
             writer.Write("<TH Align='Center'>TimeSpentInSlowestModule</TH>");
             writer.Write("<TH Align='Center'>%TimeSpentInSlowestModule</TH>");
             writer.WriteLine("</TR>");
 
-            foreach (var request in requestByID.Values.Where(x => x.EndTime != DateTime.MinValue).OrderByDescending(m => m.EndTime - m.StartTime))
+            foreach (var request in requestByID.Values.Where(x => x.EndTime != DateTime.MinValue).OrderByDescending(m => m.EndTime - m.StartTime).Take(100))
             {
                 writer.WriteLine("<TR>");
 
@@ -1427,23 +1450,76 @@ table {
                 double slowestTime = 0;
 
                 List <IISModuleEvent> moduleEvents;
+                RequestNotification notification = RequestNotification.BeginRequest;
                 if (requestByIDModuleEvents.TryGetValue(request.ContextId, out moduleEvents))
                 {
                     
-                    slowestModule = GetSlowestModule(request.ContextId, moduleEvents, out slowestTime);
+                    slowestModule = GetSlowestModule(request.ContextId, moduleEvents, out slowestTime, out notification);
                 }
                 double totalTimeSpent = (request.EndTime - request.StartTime).TotalMilliseconds;
-                writer.WriteLine($"<TD>{request.Method}</TD><TD>{request.Path}</TD><TD>{request.BytesReceived}</TD><TD>{request.BytesSent}</TD><TD>{request.ContextId}</TD><TD>{request.StatusCode}</TD><TD>{request.SubStatusCode}</TD><TD>{totalTimeSpent}</TD><TD>{slowestModule}</TD><TD>{slowestTime}</TD><TD>{((slowestTime / totalTimeSpent * 100)):0.00}%</TD>");
+
+                string requestPath = request.Path;
+
+                // limit display of URL to 100 charachters only
+                // otherwise the table is expanding crazily
+                if (requestPath.Length > 100)
+                    requestPath = requestPath.Substring(0, 100) + "..." ; 
+
+                writer.WriteLine($"<TD>{request.Method}</TD><TD>{requestPath}</TD><TD>{request.BytesReceived}</TD><TD>{request.BytesSent}</TD><TD>{request.ContextId}</TD><TD>{request.StatusCode}</TD><TD>{request.SubStatusCode}</TD><TD>{totalTimeSpent}</TD><TD>{slowestModule} ({notification})</TD><TD>{slowestTime}</TD><TD>{((slowestTime / totalTimeSpent * 100)):0.00}%</TD>");
                 writer.Write("</TR>");
             }
             writer.WriteLine("</TABLE>");
+
+
+
+            writer.WriteLine("<H2>Failed Requests</H2>");
+
+            writer.WriteLine("<Table Border=\"1\">");
+            writer.Write("<TR>");
+            writer.Write("<TH Align='Center'>Method</TH>");
+            writer.Write("<TH Align='Center'>Path</TH>");
+            writer.Write("<TH Align='Center'>Bytes Recieved (cs-bytes)</TH>");
+            writer.Write("<TH Align='Center'>Bytes Sent (sc-bytes)</TH>");
+            writer.Write("<TH Align='Center'>ContextId</TH>");
+            writer.Write("<TH Align='Center'>HttpStatus</TH>");
+            writer.Write("<TH Align='Center'>Reason</TH>");
+            writer.Write("<TH Align='Center'>ErrorCode</TH>");
+            writer.Write("<TH Align='Center'>FailingModuleName</TH>");
+            writer.Write("<TH Align='Center'>ConfigExceptionInfo</TH>");
+            writer.Write("<TH Align='Center'>Duration(ms)</TH>");
+
+            writer.WriteLine("</TR>");
+
+            foreach (var request in requestByID.Values.Where(x => x.FailureDetails !=null))
+            {
+                writer.WriteLine("<TR>");
+
+             
+                double totalTimeSpent = (request.EndTime - request.StartTime).TotalMilliseconds;
+
+                string requestPath = request.Path;
+
+                // limit display of URL to 100 charachters only
+                // otherwise the table is expanding crazily
+                if (requestPath.Length > 100)
+                    requestPath = requestPath.Substring(0, 100) + "...";
+
+                writer.WriteLine($"<TD>{request.Method}</TD><TD>{requestPath}</TD><TD>{request.BytesReceived}</TD><TD>{request.BytesSent}</TD><TD>{request.ContextId}</TD><TD>{request.FailureDetails.HttpStatus}.{request.FailureDetails.HttpSubStatus}</TD><TD>{request.FailureDetails.HttpReason}</TD><TD>{request.FailureDetails.ErrorCode}</TD><TD>{request.FailureDetails.ModuleName} ({request.FailureDetails.Notification}) </TD><TD>{request.FailureDetails.ConfigExceptionInfo}</TD><TD>{totalTimeSpent}</TD>");
+                writer.Write("</TR>");
+            }
+
+            writer.WriteLine("</TABLE>");
+
             writer.Flush();
         }
 
-        private string GetSlowestModule(Guid contextId, List<IISModuleEvent> moduleEvents, out double slowestTime)
+       
+
+        private string GetSlowestModule(Guid contextId, List<IISModuleEvent> moduleEvents, out double slowestTime, out RequestNotification notification)
         {
             string ModuleName = string.Empty;
             slowestTime = 0;
+            notification = RequestNotification.BeginRequest;
 
             foreach (var module in moduleEvents)
             {
@@ -1454,6 +1530,7 @@ table {
                     {
                         slowestTime = timeInThisModule;
                         ModuleName = module.Name;
+                        notification = module.Notification;
                     }
                 }
             }
@@ -1466,14 +1543,13 @@ table {
             public string Name;
             public DateTime ModuleStartTime;
             public DateTime ModuleEndTime;
-            public int Notification;
+            public RequestNotification Notification;
         }
 
         class IISRequest
         {
-            public string Method;       // GET or POST
-            public string Path;         // url path
-            public string QueryString;  // Query 
+            public string Method;       
+            public string Path;                     
             public Guid ContextId;
             public DateTime StartTime;
             public DateTime EndTime;
@@ -1481,7 +1557,19 @@ table {
             public int BytesReceived;
             public int StatusCode;
             public int SubStatusCode;
-            
+            public RequestFailureDetails FailureDetails;
+
+        }
+
+        class RequestFailureDetails
+        {
+            public string ModuleName;
+            public RequestNotification Notification;
+            public string HttpReason;
+            public int HttpStatus;
+            public int HttpSubStatus;
+            public int ErrorCode;
+            public string ConfigExceptionInfo;
         }
     }
 
