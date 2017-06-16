@@ -208,8 +208,8 @@ namespace Microsoft.Diagnostics.Tracing
                     }
 
                     m_unknownTimeStartMsec.Set((int)startStopActivity.Index, 0);
-                    Debug.Assert(m_threadToStartStopActivity[(int)data.Thread().ThreadIndex] == startStopActivity ||
-                        m_threadToStartStopActivity[(int)data.Thread().ThreadIndex] == null);
+                    //Debug.Assert(m_threadToStartStopActivity[(int)data.Thread().ThreadIndex] == startStopActivity ||
+                    //    m_threadToStartStopActivity[(int)data.Thread().ThreadIndex] == null);
                     m_threadToStartStopActivity[(int)data.Thread().ThreadIndex] = null;
                 };
             }
@@ -421,7 +421,7 @@ namespace Microsoft.Diagnostics.Tracing
             if (oldStartStop != null)
             {
                 double unknownStartTimeMSec = m_unknownTimeStartMsec.Get((int)oldStartStop.Index);
-                Debug.Assert(unknownStartTimeMSec < 0);
+                //Debug.Assert(unknownStartTimeMSec < 0);
                 if (unknownStartTimeMSec < 0)
                 {
                     unknownStartTimeMSec++;     //We represent the ref count as a negative number, here we are decrementing the ref count

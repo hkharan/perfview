@@ -1761,8 +1761,10 @@ namespace Microsoft.Diagnostics.Tracing.Etlx
             }
 
             // The eventsToStacks array is sorted.  
-            for (int i = 0; i < eventsToStacks.Count - 1; i++)
-                Debug.Assert(eventsToStacks[i].EventIndex < eventsToStacks[i + 1].EventIndex);
+            //for (int i = 0; i < eventsToStacks.Count - 1; i++)
+            //{
+            //    Debug.Assert(eventsToStacks[i].EventIndex < eventsToStacks[i + 1].EventIndex);
+            //}
 #endif
 
             Debug.Assert(eventCount % eventsPerPage == numberOnPage || numberOnPage == eventsPerPage || eventCount == 0);
@@ -3421,7 +3423,7 @@ namespace Microsoft.Diagnostics.Tracing.Etlx
                 // Note many of these issues are reasonably benign, (e.g. we lose the kernel part of a stack)
                 // so don't sweat this too much.    Because the source that we do later is not stable, which
                 // of the two equal entries gets chosen will be random.  
-                Debug.Assert(eventsToStacks[idx].EventIndex != eventIndex);
+                //Debug.Assert(eventsToStacks[idx].EventIndex != eventIndex);
             }
 #endif
             eventsToStacks.Insert(whereToInsertIndex, new EventsToStackIndex(eventIndex, stackIndex));

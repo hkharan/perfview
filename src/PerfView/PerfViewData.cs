@@ -1336,8 +1336,7 @@ table {
                     else
                     {
                         var putBreakpoint = 0;
-                    }
-                    //iisInfo.AppendLine(string.Format("URL = {0} , CONTEXTID = {1} <br/>", request.RequestURL, request.ContextId));
+                    }                   
                     startcount++;
                 }
                 else
