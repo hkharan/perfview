@@ -38,6 +38,7 @@ using Triggers;
 using Utilities;
 using Address = System.UInt64;
 using EventSource = EventSources.EventSource;
+using PerfViewExtensibility;
 
 namespace PerfView
 {
@@ -1326,6 +1327,7 @@ table {
                     IISRequest req = new IISRequest();
                     req.ContextId = request.ContextId;
                     req.StartTime = request.TimeStamp;
+                    req.StartTimeRelativeMSec = request.TimeStampRelativeMSec;
                     req.Method = request.RequestVerb;
                     req.Path = request.RequestURL;
                     req.EndTime = DateTime.MinValue;
@@ -1354,6 +1356,7 @@ table {
                 if (requestByID.TryGetValue(req.ContextId, out request))
                 {
                     request.EndTime = req.TimeStamp;
+                    request.EndTimeRelativeMSec = req.TimeStampRelativeMSec;
                     request.BytesReceived = req.BytesReceived;
                     request.BytesSent = req.BytesSent;
                     request.StatusCode = req.HttpStatus;
@@ -1373,6 +1376,9 @@ table {
                     var iisModuleEvent = new IISModuleEvent();
                     iisModuleEvent.Name = moduleEvent.ModuleName;
                     iisModuleEvent.ModuleStartTime = moduleEvent.TimeStamp;
+                    iisModuleEvent.StartTimeRelativeMSec = moduleEvent.TimeStampRelativeMSec;
+                    iisModuleEvent.ProcessId = moduleEvent.ProcessID;
+                    iisModuleEvent.ThreadId = moduleEvent.ThreadID;
                     iisModuleEvent.Notification = (RequestNotification)moduleEvent.Notification;
                     moduleEvents.Add(iisModuleEvent);
                 }
@@ -1382,6 +1388,9 @@ table {
                     var iisModuleEvent = new IISModuleEvent();
                     iisModuleEvent.Name = moduleEvent.ModuleName;
                     iisModuleEvent.ModuleStartTime = moduleEvent.TimeStamp;
+                    iisModuleEvent.StartTimeRelativeMSec = moduleEvent.TimeStampRelativeMSec;
+                    iisModuleEvent.ProcessId = moduleEvent.ProcessID;
+                    iisModuleEvent.ThreadId = moduleEvent.ThreadID;
                     iisModuleEvent.Notification = (RequestNotification)moduleEvent.Notification;
                     moduleEventsTemp.Add(iisModuleEvent);
                     requestByIDModuleEvents.Add(moduleEvent.ContextId, moduleEventsTemp);
@@ -1399,6 +1408,7 @@ table {
                     if (module != null)
                     {
                         module.ModuleEndTime = moduleEvent.TimeStamp;
+                        module.EndTimeRelativeMSec = moduleEvent.TimeStampRelativeMSec;
                     }
                 }
             };
@@ -1445,7 +1455,7 @@ table {
             {
                 writer.WriteLine("<TR>");
 
-                string slowestModule = "";
+                IISModuleEvent slowestModule = new IISModuleEvent();
                 double slowestTime = 0;
 
                 List <IISModuleEvent> moduleEvents;
@@ -1453,8 +1463,20 @@ table {
                 if (requestByIDModuleEvents.TryGetValue(request.ContextId, out moduleEvents))
                 {
                     
-                    slowestModule = GetSlowestModule(request.ContextId, moduleEvents, out slowestTime, out notification);
+                    slowestModule = GetSlowestModule(request.ContextId, moduleEvents);
                 }
+
+                slowestTime = slowestModule.ModuleEndTime.Subtract(slowestModule.ModuleStartTime).TotalMilliseconds;
+                notification = slowestModule.Notification;
+
+                int processId = slowestModule.ProcessId;
+                int ThreadId = slowestModule.ThreadId;
+
+                double startTimeModule = slowestModule.StartTimeRelativeMSec;
+                double endTimeModule = slowestModule.EndTimeRelativeMSec;
+
+                string threadTimeStacksString = $"{processId};{ThreadId};{startTimeModule};{endTimeModule}";
+
                 double totalTimeSpent = (request.EndTime - request.StartTime).TotalMilliseconds;
 
                 string requestPath = request.Path;
@@ -1462,9 +1484,12 @@ table {
                 // limit display of URL to 100 charachters only
                 // otherwise the table is expanding crazily
                 if (requestPath.Length > 100)
-                    requestPath = requestPath.Substring(0, 100) + "..." ; 
+                    requestPath = requestPath.Substring(0, 100) + "..." ;
 
-                writer.WriteLine($"<TD>{request.Method}</TD><TD>{requestPath}</TD><TD>{request.BytesReceived}</TD><TD>{request.BytesSent}</TD><TD>{request.ContextId}</TD><TD>{request.StatusCode}</TD><TD>{request.SubStatusCode}</TD><TD>{totalTimeSpent}</TD><TD>{slowestModule} ({notification})</TD><TD>{slowestTime}</TD><TD>{((slowestTime / totalTimeSpent * 100)):0.00}%</TD>");
+
+                string detailedRequestCommandString = $"detailedrequestevents/{request.ContextId};{request.StartTimeRelativeMSec};{request.EndTimeRelativeMSec}";
+
+                writer.WriteLine($"<TD>{request.Method}</TD><TD>{requestPath}</TD><TD>{request.BytesReceived}</TD><TD>{request.BytesSent}</TD><TD><A HREF=\"command:{detailedRequestCommandString}\">{request.ContextId}</A></TD><TD>{request.StatusCode}</TD><TD>{request.SubStatusCode}</TD><TD>{totalTimeSpent}</TD><TD><A HREF=\"command:threadtimestacks/{threadTimeStacksString}\">{slowestModule.Name}</A> ({notification})</TD><TD>{slowestTime}</TD><TD>{((slowestTime / totalTimeSpent * 100)):0.00}%</TD>");
                 writer.Write("</TR>");
             }
             writer.WriteLine("</TABLE>");
@@ -1512,13 +1537,91 @@ table {
             writer.Flush();
         }
 
-       
-
-        private string GetSlowestModule(Guid contextId, List<IISModuleEvent> moduleEvents, out double slowestTime, out RequestNotification notification)
+        protected override string DoCommand(string command, StatusBar worker)
         {
+            if (command.StartsWith("detailedrequestevents/"))
+            {
+                string detailedrequesteventsString = command.Substring(22);
+
+                var detailedrequesteventsParams = detailedrequesteventsString.Split(';');
+
+                string requestId = detailedrequesteventsParams[0];
+                string startTime = detailedrequesteventsParams[1];
+                string endTime = detailedrequesteventsParams[2];
+
+                //using (var etlFile = CommandEnvironment.OpenETLFile(DataFile.FilePath))
+                var etlFile = CommandEnvironment.OpenETLFile(DataFile.FilePath);
+                var events = etlFile.Events;
+
+                // Pick out the desired events. 
+                var desiredEvents = new List<string>();
+                foreach (var eventName in events.EventNames)
+                {
+                    if (eventName.Contains("IIS_Trace") || eventName.Contains("AspNet"))
+                        desiredEvents.Add(eventName);
+                }
+                events.SetEventFilter(desiredEvents);
+
+                GuiApp.MainWindow.Dispatcher.BeginInvoke((Action)delegate ()
+                {
+                    // TODO FIX NOW this is probably a hack?
+                    var file = PerfViewFile.Get(events.m_EtlFile.FilePath);
+                    var eventSource = new PerfViewEventSource(file);
+                    eventSource.m_eventSource = events;
+
+                    eventSource.Viewer = new EventWindow(GuiApp.MainWindow, eventSource);
+
+                    eventSource.Viewer.TextFilterTextBox.Text = requestId;
+                    eventSource.Viewer.StartTextBox.Text = startTime;
+                    eventSource.Viewer.EndTextBox.Text = endTime;
+
+                    eventSource.Viewer.Loaded += delegate {
+                        eventSource.Viewer.EventTypes.SelectAll();
+                        eventSource.Viewer.Update();
+                    };
+
+                    eventSource.Viewer.Show();
+
+
+                });               
+
+            }
+
+            else if (command.StartsWith("threadtimestacks/"))
+            {
+                string threadTimeStacksString = command.Substring(17);
+
+                var threadTimeStacksParams = threadTimeStacksString.Split(';');
+
+                int processID = Convert.ToInt32(threadTimeStacksParams[0]);
+                int threadId = Convert.ToInt32(threadTimeStacksParams[1]);
+                string startTime = threadTimeStacksParams[2];
+                string endTime = threadTimeStacksParams[3];
+
+                using (var etlFile = CommandEnvironment.OpenETLFile(DataFile.FilePath))
+                {
+                    etlFile.SetFilterProcess(processID);
+                    var stacks = etlFile.ThreadTimeStacks();
+                    stacks.Filter.StartTimeRelativeMSec = startTime;
+                    stacks.Filter.EndTimeRelativeMSec = endTime;
+
+                    //Thread(38008); (11276)
+                    stacks.Filter.IncludeRegExs = $"Process% w3wp ({processID.ToString()});Thread ({threadId.ToString()})";
+
+                    CommandEnvironment.OpenStackViewer(stacks);
+
+                }
+            }
+            return base.DoCommand(command, worker);
+        }
+
+        private IISModuleEvent GetSlowestModule(Guid contextId, List<IISModuleEvent> moduleEvents)
+        {
+            IISModuleEvent slowestmodule = new IISModuleEvent();
+
             string ModuleName = string.Empty;
-            slowestTime = 0;
-            notification = RequestNotification.BeginRequest;
+            double slowestTime = 0;
+            
 
             foreach (var module in moduleEvents)
             {
@@ -1528,13 +1631,12 @@ table {
                     if (timeInThisModule > slowestTime)
                     {
                         slowestTime = timeInThisModule;
-                        ModuleName = module.Name;
-                        notification = module.Notification;
+                        slowestmodule = module;
                     }
                 }
             }
 
-            return ModuleName;
+            return slowestmodule;
         }
 
         class IISModuleEvent
@@ -1543,6 +1645,11 @@ table {
             public DateTime ModuleStartTime;
             public DateTime ModuleEndTime;
             public RequestNotification Notification;
+            public int ProcessId;
+            public int ThreadId;
+            public double EndTimeRelativeMSec;
+            public double StartTimeRelativeMSec;
+
         }
 
         class IISRequest
@@ -1557,6 +1664,9 @@ table {
             public int StatusCode;
             public int SubStatusCode;
             public RequestFailureDetails FailureDetails;
+            public double EndTimeRelativeMSec;
+            public double StartTimeRelativeMSec;
+
 
         }
 
