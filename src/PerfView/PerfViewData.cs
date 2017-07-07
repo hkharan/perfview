@@ -1315,43 +1315,33 @@ table {
 
             var requestByIDModuleEvents = new Dictionary<Guid, List<IISModuleEvent>>();
 
+            var requestByIDGenericEvents = new Dictionary<Guid, List<IISPipelineEvent>>();
+
             int startcount = 0;
             int endcount = 0;
-            int kuduRequests = 0;
+
 
             iis.IIS_TransStart += delegate (W3GeneralStartNewRequest request)
             {
-                if (!request.RequestURL.Contains("://~1"))
-                {
 
-                    IISRequest req = new IISRequest();
-                    req.ContextId = request.ContextId;
-                    req.StartTime = request.TimeStamp;
-                    req.StartTimeRelativeMSec = request.TimeStampRelativeMSec;
-                    req.Method = request.RequestVerb;
-                    req.Path = request.RequestURL;
-                    req.EndTime = DateTime.MinValue;
-                    //m_Requests.Add(req);
+                IISRequest req = new IISRequest();
+                req.ContextId = request.ContextId;
+                req.StartTime = request.TimeStamp;
+                req.StartTimeRelativeMSec = request.TimeStampRelativeMSec;
+                req.Method = request.RequestVerb;
+                req.Path = request.RequestURL;
+                req.EndTime = DateTime.MinValue;
+               
+                if (!requestByID.ContainsKey(request.ContextId))
+                    requestByID.Add(request.ContextId, req);
 
-                    if (!requestByID.ContainsKey(request.ContextId))
-                        requestByID.Add(request.ContextId, req);
-                    else
-                    {
-                        var putBreakpoint = 0;
-                    }                   
-                    startcount++;
-                }
-                else
-                {
-                    kuduRequests++;
-                }
+                startcount++;
 
 
             };
 
             iis.IIS_TransStop += delegate (W3GeneralEndNewRequest req)
             {
-
                 IISRequest request;
                 if (requestByID.TryGetValue(req.ContextId, out request))
                 {
@@ -1361,7 +1351,6 @@ table {
                     request.BytesSent = req.BytesSent;
                     request.StatusCode = req.HttpStatus;
                     request.SubStatusCode = req.HttpSubStatus;
-
 
                 }
                 endcount++;
@@ -1430,9 +1419,66 @@ table {
 
             };
 
+            iis.IISRequestNotificationEventsOpcode16 += delegate (IISRequestNotificationEventsResponseErrorStatus responseErrorStatusNotification)
+            {
+                IISRequest request;
+                if (requestByID.TryGetValue(responseErrorStatusNotification.ContextId, out request))
+                {
+                    request.FailureDetails = new RequestFailureDetails();
+                    request.FailureDetails.HttpReason = responseErrorStatusNotification.HttpReason;
+                    request.FailureDetails.HttpStatus = responseErrorStatusNotification.HttpStatus;
+                    request.FailureDetails.HttpSubStatus = responseErrorStatusNotification.HttpSubStatus;
+                    request.FailureDetails.ModuleName = responseErrorStatusNotification.ModuleName;
+                    request.FailureDetails.ConfigExceptionInfo = responseErrorStatusNotification.ConfigExceptionInfo;
+                    request.FailureDetails.Notification = (RequestNotification)responseErrorStatusNotification.Notification;
+
+                }
+
+            };
+
+            iis.IIS_TransOpcode35 += delegate (W3GeneralFlushResponseStart obj)
+            {
+                AddGenericStartEventToRequest(requestByIDGenericEvents, obj.ContextId, "W3GeneralFlushResponse", obj.TimeStamp);
+            };
+
+            iis.IIS_TransOpcode36 += delegate (W3GeneralFlushResponseEnd obj)
+            {
+                AddGenericStopEventToRequest(requestByIDGenericEvents, obj.ContextId, "W3GeneralFlushResponse", obj.TimeStamp);
+            };
+
+            iis.IIS_TransOpcode37 += delegate (W3GeneralReadEntityStart obj)
+            {
+                AddGenericStartEventToRequest(requestByIDGenericEvents, obj.ContextId, "W3GeneralReadEntity", obj.TimeStamp);
+            };
+
+            iis.IIS_TransOpcode38 += delegate (W3GeneralReadEntityEnd obj)
+            {
+                AddGenericStopEventToRequest(requestByIDGenericEvents, obj.ContextId, "W3GeneralReadEntity", obj.TimeStamp);
+            };
+
+            iis.IIS_Cache_TransOpcode10 += delegate (W3CacheFileCacheAccessStart obj)
+            {
+                AddGenericStartEventToRequest(requestByIDGenericEvents, obj.ContextId, "W3CacheFileCacheAccess", obj.TimeStamp);
+            };
+
+            iis.IIS_Cache_TransOpcode11 += delegate (W3CacheFileCacheAccessEnd obj)
+            {
+                AddGenericStopEventToRequest(requestByIDGenericEvents, obj.ContextId, "W3CacheFileCacheAccess", obj.TimeStamp);
+            };
+            iis.IIS_Cache_TransOpcode12 += delegate (W3CacheURLCacheAccessStart obj)
+            {
+                AddGenericStartEventToRequest(requestByIDGenericEvents, obj.ContextId, "W3CacheURLCacheAccess", obj.TimeStamp);
+            };
+
+            iis.IIS_Cache_TransOpcode13 += delegate (W3CacheURLCacheAccessEnd obj)
+            {
+                AddGenericStopEventToRequest(requestByIDGenericEvents, obj.ContextId, "W3CacheURLCacheAccess", obj.TimeStamp);
+            };
+
+
             dispatcher.Process();
 
-            writer.WriteLine("KUDU Requests Excluded = " + kuduRequests);
+        
             writer.WriteLine("Requests Started = " + startcount);
             writer.WriteLine("Requests End = " + endcount);
 
@@ -1449,6 +1495,7 @@ table {
             writer.Write("<TH Align='Center'>SlowestModule</TH>");           
             writer.Write("<TH Align='Center'>TimeSpentInSlowestModule</TH>");
             writer.Write("<TH Align='Center'>%TimeSpentInSlowestModule</TH>");
+            writer.Write("<TH Align='Center'>GenericEvents</TH>");
             writer.WriteLine("</TR>");
 
             foreach (var request in requestByID.Values.Where(x => x.EndTime != DateTime.MinValue).OrderByDescending(m => m.EndTime - m.StartTime).Take(100))
@@ -1486,10 +1533,22 @@ table {
                 if (requestPath.Length > 100)
                     requestPath = requestPath.Substring(0, 100) + "..." ;
 
+                List<IISPipelineEvent> iisPipelineEvents;
+
+                string genericEvents = "";
+
+                if (requestByIDGenericEvents.TryGetValue(request.ContextId, out iisPipelineEvents))
+                {
+                    foreach (var item in iisPipelineEvents)
+                    {
+                        genericEvents += $"{item.EventName}={item.EndTime.Subtract(item.StartTime).TotalMilliseconds} ms <br/>";
+                    }
+                }
+
 
                 string detailedRequestCommandString = $"detailedrequestevents/{request.ContextId};{request.StartTimeRelativeMSec};{request.EndTimeRelativeMSec}";
 
-                writer.WriteLine($"<TD>{request.Method}</TD><TD>{requestPath}</TD><TD>{request.BytesReceived}</TD><TD>{request.BytesSent}</TD><TD><A HREF=\"command:{detailedRequestCommandString}\">{request.ContextId}</A></TD><TD>{request.StatusCode}</TD><TD>{request.SubStatusCode}</TD><TD>{totalTimeSpent}</TD><TD><A HREF=\"command:threadtimestacks/{threadTimeStacksString}\">{slowestModule.Name}</A> ({notification})</TD><TD>{slowestTime}</TD><TD>{((slowestTime / totalTimeSpent * 100)):0.00}%</TD>");
+                writer.WriteLine($"<TD>{request.Method}</TD><TD>{requestPath}</TD><TD>{request.BytesReceived}</TD><TD>{request.BytesSent}</TD><TD><A HREF=\"command:{detailedRequestCommandString}\">{request.ContextId}</A></TD><TD>{request.StatusCode}</TD><TD>{request.SubStatusCode}</TD><TD>{totalTimeSpent}</TD><TD><A HREF=\"command:threadtimestacks/{threadTimeStacksString}\">{slowestModule.Name}</A> ({notification})</TD><TD>{slowestTime}</TD><TD>{((slowestTime / totalTimeSpent * 100)):0.00}%</TD><TD>{genericEvents}</TD>");
                 writer.Write("</TR>");
             }
             writer.WriteLine("</TABLE>");
@@ -1535,6 +1594,42 @@ table {
             writer.WriteLine("</TABLE>");
 
             writer.Flush();
+        }
+
+        private void AddGenericStartEventToRequest(Dictionary<Guid, List<IISPipelineEvent>> requestByIDGenericEvents, Guid ContextId, string eventName, DateTime timeStamp)
+        {
+
+            List<IISPipelineEvent> pipelineEvents;
+            if (requestByIDGenericEvents.TryGetValue(ContextId, out pipelineEvents))
+            {
+                var iisPipelineEvent = new IISPipelineEvent();
+                iisPipelineEvent.EventName = eventName;
+                iisPipelineEvent.StartTime = timeStamp;
+                pipelineEvents.Add(iisPipelineEvent);
+            }
+            else
+            {
+                List<IISPipelineEvent> pipelineEventsTemp = new List<IISPipelineEvent>();
+                var iisPipelineEvent = new IISPipelineEvent();
+                iisPipelineEvent.EventName = eventName;
+                iisPipelineEvent.StartTime = timeStamp;
+                pipelineEventsTemp.Add(iisPipelineEvent);
+                requestByIDGenericEvents.Add(ContextId, pipelineEventsTemp);
+            }
+        }
+
+        private void AddGenericStopEventToRequest(Dictionary<Guid, List<IISPipelineEvent>> requestByIDGenericEvents, Guid ContextId, string eventName, DateTime timeStamp)
+        {
+            List<IISPipelineEvent> pipelineEvents;
+            if (requestByIDGenericEvents.TryGetValue(ContextId, out pipelineEvents))
+            {
+                // Checking for minValue here as two Start\Stop events do 
+                // not have a unique id , so we will try to correlate 
+                // them just as the order of events are processed
+                var iisPipelineEvent = pipelineEvents.FirstOrDefault(m => (m.EventName == eventName) && m.EndTime == DateTime.MinValue);
+                iisPipelineEvent.EndTime = timeStamp;
+            }
+
         }
 
         protected override string DoCommand(string command, StatusBar worker)
@@ -1639,6 +1734,7 @@ table {
             return slowestmodule;
         }
 
+
         class IISModuleEvent
         {
             public string Name;
@@ -1651,6 +1747,14 @@ table {
             public double StartTimeRelativeMSec;
 
         }
+
+        class IISPipelineEvent
+        {
+            public string EventName;
+            public DateTime StartTime;
+            public DateTime EndTime;
+        }
+
 
         class IISRequest
         {
