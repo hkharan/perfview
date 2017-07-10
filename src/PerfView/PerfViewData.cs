@@ -1308,7 +1308,9 @@ table {
 
         protected override void WriteHtmlBody(TraceLog dataFile, TextWriter writer, string fileName, TextWriter log)
         {
-            writer.WriteLine("<H2>Top 100 Slowest Request Statistics</H2>");
+            writer.WriteLine("<H2>IIS Request Statistics</H2>");
+
+            writer.WriteLine("<H3>Top 100 Slowest Request Statistics</H3>");
             var dispatcher = dataFile.Events.GetSource();
 
             var iis = new IisTraceEventParser(dispatcher);
@@ -1350,36 +1352,31 @@ table {
                     request.SubStatusCode = req.HttpSubStatus;
 
                 }
-                // so this is the case where we dont have a GENERAL_REQUEST_START 
-                // event but we got a Module Event fired for this request
-                else
-                {
-
-                }
+                
                 endcount++;
             };
 
             iis.IISRequestNotificationEventsStart += delegate (IISRequestNotificationEventsStart moduleEvent)
             {                
                 IISRequest request;
-                if (requestByID.TryGetValue(moduleEvent.ContextId, out request))
+                if (!requestByID.TryGetValue(moduleEvent.ContextId, out request))
                 {
-                    var iisModuleEvent = new IISModuleEvent();
-                    iisModuleEvent.Name = moduleEvent.ModuleName;                    
-                    iisModuleEvent.StartTimeRelativeMSec = moduleEvent.TimeStampRelativeMSec;
-                    iisModuleEvent.ProcessId = moduleEvent.ProcessID;
-                    iisModuleEvent.StartThreadId = moduleEvent.ThreadID;
-                    iisModuleEvent.Notification = (RequestNotification)moduleEvent.Notification;
-                    request.PipelineEvents.Add(iisModuleEvent);
+                    // so this is the case where we dont have a GENERAL_REQUEST_START 
+                    // event but we got a MODULE\START Event fired for this request 
+                    // so we do our best to create a FAKE start request event
+                    // populating as much information as we can as this is one of 
+                    // those requests which could have started before the trace was started
+                    request = GenerateFakeIISRequest(moduleEvent.ContextId, moduleEvent);
+                
                 }
 
-                // so this is the case where we dont have a GENERAL_REQUEST_START 
-                // event but we got a Module Event fired for this request
-                else
-                {
-
-                }                    
-
+                var iisModuleEvent = new IISModuleEvent();
+                iisModuleEvent.Name = moduleEvent.ModuleName;
+                iisModuleEvent.StartTimeRelativeMSec = moduleEvent.TimeStampRelativeMSec;
+                iisModuleEvent.ProcessId = moduleEvent.ProcessID;
+                iisModuleEvent.StartThreadId = moduleEvent.ThreadID;
+                iisModuleEvent.Notification = (RequestNotification)moduleEvent.Notification;
+                request.PipelineEvents.Add(iisModuleEvent);
             };
 
             iis.IISRequestNotificationEventsStop += delegate (IISRequestNotificationEventsEnd moduleEvent)
@@ -1396,12 +1393,12 @@ table {
                     }
                 }
                 // so this is the case where we dont have a GENERAL_REQUEST_START 
-                // event but we got a Module Event fired for this request
-                else
-                {
-                   
-
-                }               
+                // event as well as Module Start event for the request but we got 
+                // a Module End Event fired for this request. Assuming this happens, 
+                // the worst we will miss is delay between this module end event
+                // to the next module start event and that should ideally be very
+                // less. Hence we don't need the else part for this condition
+                //else { }               
             };
 
             iis.IISRequestNotificationEventsOpcode16 += delegate (IISRequestNotificationEventsResponseErrorStatus responseErrorStatusNotification)
@@ -1476,6 +1473,15 @@ table {
             writer.Write("<TH Align='Center'>TimeSpentInSlowestModule(ms)</TH>");
             writer.Write("<TH Align='Center'>%TimeSpentInSlowestModule</TH>");
             writer.WriteLine("</TR>");
+
+            foreach (var request in requestByID.Values.Where(x => x.EndTimeRelativeMSec == 0))
+            {
+                // so these are all the requests for which we see a GENERAL_REQUEST_START and no GENERAL_REQUEST_END
+                // for these it is safe to set the request.EndTimeRelativeMSec to the last timestamp in the trace
+                // because that is pretty much the duration that the request is active for.
+
+                request.EndTimeRelativeMSec = dataFile.SessionEndTimeRelativeMSec;
+            }
 
             foreach (var request in requestByID.Values.Where(x => x.EndTimeRelativeMSec != 0).OrderByDescending(m => m.EndTimeRelativeMSec - m.StartTimeRelativeMSec).Take(100))
             {
@@ -1581,17 +1587,46 @@ table {
             writer.Flush();
         }
 
+        private IISRequest GenerateFakeIISRequest(Guid ContextId, TraceEvent traceEvent, double timeStamp = 0)
+        {
+            IISRequest request = new IISRequest();
+            request.ContextId = ContextId;
+
+            if (traceEvent != null)
+            {
+                request.StartTimeRelativeMSec = traceEvent.TimeStampRelativeMSec;
+            }
+            else
+            {
+                request.StartTimeRelativeMSec = timeStamp;
+            }
+            request.Method = "UNKNOWN";
+            request.Path = "Unkwown (Request Start not captured in trace)";
+
+            return request;
+        }
+
         private void AddGenericStartEventToRequest(int threadId, Guid ContextId, string eventName, double timeStamp)
         {
             IISRequest request;
-            if (requestByID.TryGetValue(ContextId, out request))
+
+            if (!requestByID.TryGetValue(ContextId, out request))
             {
-                var iisPipelineEvent = new IISPipelineEvent();
-                iisPipelineEvent.Name = eventName;
-                iisPipelineEvent.StartTimeRelativeMSec = timeStamp;
-                iisPipelineEvent.StartThreadId = threadId;
-                request.PipelineEvents.Add(iisPipelineEvent);
-            }                
+                // so this is the case where we dont have a GENERAL_REQUEST_START 
+                // event but we got a Module Event fired for this request 
+                // so we do our best to create a FAKE start request event
+                // populating as much information as we can.
+                request = GenerateFakeIISRequest(ContextId, null, timeStamp);
+
+            }
+
+
+            var iisPipelineEvent = new IISPipelineEvent();
+            iisPipelineEvent.Name = eventName;
+            iisPipelineEvent.StartTimeRelativeMSec = timeStamp;
+            iisPipelineEvent.StartThreadId = threadId;
+            request.PipelineEvents.Add(iisPipelineEvent);
+
         }
 
         private void AddGenericStopEventToRequest(int threadId, Guid ContextId, string eventName, double timeStamp)
@@ -5419,6 +5454,10 @@ table {
             m_Children.Add(new PerfViewProcesses(this));
             m_Children.Add(new PerfViewStackSource(this, "Processes / Files / Registry") { SkipSelectProcess = true });
 
+            if (hasIis)
+            {
+                m_Children.Add(new PerfViewIisStats(this));
+            }
             if (hasCPUStacks)
                 m_Children.Add(new PerfViewStackSource(this, "CPU"));
             if (hasCSwitchStacks)
@@ -5505,10 +5544,7 @@ table {
                     obsolete.Children.Add(new PerfViewStackSource(this, "Server Request Managed Allocation"));
                 }
             }
-            if (hasIis)
-            {
-                m_Children.Add(new PerfViewIisStats(this));
-            }
+           
 
             if (hasAnyStacks)
             {
