@@ -1356,6 +1356,51 @@ table {
                 endcount++;
             };
 
+
+            iis.IISRequestNotificationEventsDC_Stop += delegate (IISRequestNotificationPreBeginStart preBeginEvent)
+            {
+                IISRequest request;
+                if (!requestByID.TryGetValue(preBeginEvent.ContextId, out request))
+                {
+                    // so this is the case where we dont have a GENERAL_REQUEST_START 
+                    // event but we got a MODULE\START Event fired for this request 
+                    // so we do our best to create a FAKE start request event
+                    // populating as much information as we can as this is one of 
+                    // those requests which could have started before the trace was started
+                    request = GenerateFakeIISRequest(preBeginEvent.ContextId, preBeginEvent);
+
+                }
+
+                var iisPrebeginModuleEvent = new IISPrebeginModuleEvent();
+                iisPrebeginModuleEvent.Name = preBeginEvent.ModuleName;
+                iisPrebeginModuleEvent.StartTimeRelativeMSec = preBeginEvent.TimeStampRelativeMSec;
+                iisPrebeginModuleEvent.ProcessId = preBeginEvent.ProcessID;
+                iisPrebeginModuleEvent.StartThreadId = preBeginEvent.ThreadID;
+                request.PipelineEvents.Add(iisPrebeginModuleEvent);
+            };
+
+            iis.IISRequestNotificationEventsExtension += delegate(IISRequestNotificationPreBeginEnd preBeginEvent)
+            {
+                IISRequest request;
+                if (requestByID.TryGetValue(preBeginEvent.ContextId, out request))
+                {
+                    var module = request.PipelineEvents.FirstOrDefault(m => m.Name == preBeginEvent.ModuleName);
+
+                    if (module != null)
+                    {
+                        module.EndTimeRelativeMSec = preBeginEvent.TimeStampRelativeMSec;
+                        module.EndThreadId = preBeginEvent.ThreadID;
+                    }
+                }
+                // so this is the case where we dont have a GENERAL_REQUEST_START 
+                // event as well as Module Start event for the request but we got 
+                // a Module End Event fired for this request. Assuming this happens, 
+                // the worst we will miss is delay between this module end event
+                // to the next module start event and that should ideally be very
+                // less. Hence we don't need the else part for this condition
+                //else { }  
+            };
+
             iis.IISRequestNotificationEventsStart += delegate (IISRequestNotificationEventsStart moduleEvent)
             {                
                 IISRequest request;
@@ -1367,7 +1412,7 @@ table {
                     // populating as much information as we can as this is one of 
                     // those requests which could have started before the trace was started
                     request = GenerateFakeIISRequest(moduleEvent.ContextId, moduleEvent);
-                
+                    requestByID.Add(moduleEvent.ContextId, request);
                 }
 
                 var iisModuleEvent = new IISModuleEvent();
@@ -1375,6 +1420,7 @@ table {
                 iisModuleEvent.StartTimeRelativeMSec = moduleEvent.TimeStampRelativeMSec;
                 iisModuleEvent.ProcessId = moduleEvent.ProcessID;
                 iisModuleEvent.StartThreadId = moduleEvent.ThreadID;
+                iisModuleEvent.fIsPostNotification = moduleEvent.fIsPostNotification;
                 iisModuleEvent.Notification = (RequestNotification)moduleEvent.Notification;
                 request.PipelineEvents.Add(iisModuleEvent);
             };
@@ -1384,8 +1430,8 @@ table {
                 IISRequest request;
                 if (requestByID.TryGetValue(moduleEvent.ContextId, out request))
                 {
-                    var module = request.PipelineEvents.FirstOrDefault(m => (m.Name == moduleEvent.ModuleName && ((IISModuleEvent)m).Notification == (RequestNotification)moduleEvent.Notification));
-
+                    IEnumerable<IISModuleEvent> iisModuleEvents = request.PipelineEvents.OfType<IISModuleEvent>();
+                    var module = iisModuleEvents.FirstOrDefault(m => m.Name == moduleEvent.ModuleName && m.Notification == (RequestNotification)moduleEvent.Notification  && m.fIsPostNotification == moduleEvent.fIsPostNotificationEvent);
                     if (module != null)
                     {
                         module.EndTimeRelativeMSec = moduleEvent.TimeStampRelativeMSec;
@@ -1474,6 +1520,7 @@ table {
             writer.Write("<TH Align='Center'>%TimeSpentInSlowestModule</TH>");
             writer.WriteLine("</TR>");
 
+            // manual fixup for incomplete requests
             foreach (var request in requestByID.Values.Where(x => x.EndTimeRelativeMSec == 0))
             {
                 // so these are all the requests for which we see a GENERAL_REQUEST_START and no GENERAL_REQUEST_END
@@ -1481,18 +1528,28 @@ table {
                 // because that is pretty much the duration that the request is active for.
 
                 request.EndTimeRelativeMSec = dataFile.SessionEndTimeRelativeMSec;
+
+                // for this request, lets first try to find a pipeline start event which doesnt have a pipeline stop event next to it                
+                // if we find, we just set the EndTimeRelativeMSec to the end of the trace
+                var incompletePipeLineEvents = request.PipelineEvents.Where(m => m.EndTimeRelativeMSec == 0);
+
+                if (incompletePipeLineEvents.Count() == 1)
+                {
+                    var incompleteEvent = incompletePipeLineEvents.FirstOrDefault();
+                    incompleteEvent.EndTimeRelativeMSec = dataFile.SessionEndTimeRelativeMSec;
+
+                    // commenting this out as this is incorrectly adding a hyperlink
+                    // for requests in the session state module
+                    //incompleteEvent.EndThreadId = incompleteEvent.StartThreadId;
+                }
+                
             }
 
             foreach (var request in requestByID.Values.Where(x => x.EndTimeRelativeMSec != 0).OrderByDescending(m => m.EndTimeRelativeMSec - m.StartTimeRelativeMSec).Take(100))
             {
                 writer.WriteLine("<TR>");
-
-               
                 double slowestTime = 0;
-    
-
                 IISPipelineEvent slowestPipelineEvent = GetSlowestEvent(request.ContextId, request.PipelineEvents);
-
                 slowestTime = slowestPipelineEvent.EndTimeRelativeMSec - slowestPipelineEvent.StartTimeRelativeMSec;
                
                 int processId = slowestPipelineEvent.ProcessId;
@@ -1532,11 +1589,13 @@ table {
 
                 string detailedRequestCommandString = $"detailedrequestevents/{request.ContextId};{request.StartTimeRelativeMSec};{request.EndTimeRelativeMSec}";
 
-                writer.WriteLine($"<TD>{request.Method}</TD><TD><A HREF=\"command:{detailedRequestCommandString}\">{requestPath}</A></TD><TD>{request.BytesReceived}</TD><TD>{request.BytesSent}</TD><TD>{request.StatusCode}.{request.SubStatusCode}</TD><TD>{totalTimeSpent:0.00}</TD><TD>{slowestPipelineEventWithDetails}</TD><TD>{slowestTime:0.00}</TD><TD>{((slowestTime / totalTimeSpent * 100)):0.00}%</TD>");
+                string csBytes = (request.BytesReceived == 0) ? "-" : request.BytesReceived.ToString();
+                string scBytes = (request.BytesSent == 0) ? "-" : request.BytesSent.ToString();
+
+                writer.WriteLine($"<TD>{request.Method}</TD><TD><A HREF=\"command:{detailedRequestCommandString}\">{requestPath}</A></TD><TD>{csBytes}</TD><TD>{scBytes}</TD><TD>{request.StatusCode}.{request.SubStatusCode}</TD><TD>{totalTimeSpent:0.00}</TD><TD>{slowestPipelineEventWithDetails}</TD><TD>{slowestTime:0.00}</TD><TD>{((slowestTime / totalTimeSpent * 100)):0.00}%</TD>");
                 writer.Write("</TR>");
             }
             writer.WriteLine("</TABLE>");
-
 
             if (requestByID.Values.Count(x => x.FailureDetails != null) > 0)
             {
@@ -1554,7 +1613,6 @@ table {
                 writer.Write("<TH Align='Center'>ErrorCode</TH>");
                 writer.Write("<TH Align='Center'>FailingModuleName</TH>");                
                 writer.Write("<TH Align='Center'>Duration(ms)</TH>");
-
                 writer.WriteLine("</TR>");
 
                 foreach (var request in requestByID.Values.Where(x => x.FailureDetails != null))
@@ -1573,7 +1631,11 @@ table {
 
                     string detailedRequestCommandString = $"detailedrequestevents/{request.ContextId};{request.StartTimeRelativeMSec};{request.EndTimeRelativeMSec}";
 
-                    writer.WriteLine($"<TD>{request.Method}</TD><TD><A HREF=\"command:{detailedRequestCommandString}\">{requestPath}</A></TD><TD>{request.BytesReceived}</TD><TD>{request.BytesSent}</TD><TD>{request.FailureDetails.HttpStatus}.{request.FailureDetails.HttpSubStatus}</TD><TD>{request.FailureDetails.HttpReason}</TD><TD>{request.FailureDetails.ErrorCode}</TD><TD>{request.FailureDetails.ModuleName} ({request.FailureDetails.Notification}) </TD><TD>{totalTimeSpent:0.00}</TD>");
+                    string csBytes = (request.BytesReceived == 0) ? "-" : request.BytesReceived.ToString();
+                    string scBytes = (request.BytesSent == 0) ? "-" : request.BytesSent.ToString();
+
+                    writer.WriteLine($"<TD>{request.Method}</TD><TD><A HREF=\"command:{detailedRequestCommandString}\">{requestPath}</A></TD><TD>{csBytes}</TD><TD>{scBytes}</TD><TD>{request.FailureDetails.HttpStatus}.{request.FailureDetails.HttpSubStatus}</TD><TD>{request.FailureDetails.HttpReason}</TD><TD>{request.FailureDetails.ErrorCode}</TD><TD>{request.FailureDetails.ModuleName} ({request.FailureDetails.Notification}) </TD><TD>{totalTimeSpent:0.00}</TD>");
+                
                     writer.Write("</TR>");
                 }
 
@@ -1586,6 +1648,8 @@ table {
 
             writer.Flush();
         }
+
+
 
         private IISRequest GenerateFakeIISRequest(Guid ContextId, TraceEvent traceEvent, double timeStamp = 0)
         {
@@ -1617,7 +1681,7 @@ table {
                 // so we do our best to create a FAKE start request event
                 // populating as much information as we can.
                 request = GenerateFakeIISRequest(ContextId, null, timeStamp);
-
+                requestByID.Add(ContextId, request);
             }
 
 
@@ -1651,6 +1715,7 @@ table {
                 string requestId = detailedrequesteventsParams[0];
                 string startTime = detailedrequesteventsParams[1];
                 string endTime = detailedrequesteventsParams[2];
+
 
                 //using (var etlFile = CommandEnvironment.OpenETLFile(DataFile.FilePath))
                 var etlFile = CommandEnvironment.OpenETLFile(DataFile.FilePath);
@@ -1744,10 +1809,19 @@ table {
         class IISModuleEvent : IISPipelineEvent
         {
             public RequestNotification Notification;
+            public bool fIsPostNotification;
 
             public override string ToString()
             {
                 return $"{Name} ({Notification.ToString()})";
+            }
+        }
+
+        class IISPrebeginModuleEvent : IISPipelineEvent
+        {
+            public override string ToString()
+            {
+                return $"{Name} (PreBegin)";
             }
         }
 
@@ -5452,12 +5526,12 @@ table {
 
             m_Children.Add(new PerfViewTraceInfo(this));
             m_Children.Add(new PerfViewProcesses(this));
-            m_Children.Add(new PerfViewStackSource(this, "Processes / Files / Registry") { SkipSelectProcess = true });
-
             if (hasIis)
             {
                 m_Children.Add(new PerfViewIisStats(this));
             }
+            m_Children.Add(new PerfViewStackSource(this, "Processes / Files / Registry") { SkipSelectProcess = true });
+           
             if (hasCPUStacks)
                 m_Children.Add(new PerfViewStackSource(this, "CPU"));
             if (hasCSwitchStacks)
