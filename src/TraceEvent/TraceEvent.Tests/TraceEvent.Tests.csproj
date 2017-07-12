@@ -65,6 +65,9 @@
     </Reference>
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="..\..\PerfView.TestUtilities\DebugAssertionTests.cs">
+      <Link>DebugAssertionTests.cs</Link>
+    </Compile>
     <Compile Include="DispatchTests.cs" />
     <Compile Include="EtlTestBase.cs" />
     <Compile Include="GeneralParsing.cs" />
@@ -72,6 +75,10 @@
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\..\PerfView.TestUtilities\PerfView.TestUtilities.csproj">
+      <Project>{fe5cc86d-e87e-4560-8004-8852f3de6794}</Project>
+      <Name>PerfView.TestUtilities</Name>
+    </ProjectReference>
     <ProjectReference Include="..\TraceEvent.csproj">
       <Project>{B68F4968-A7CF-41CC-AD6E-373DB5E67944}</Project>
       <Name>TraceEvent</Name>
@@ -83,6 +90,7 @@
     </Content>
   </ItemGroup>
   <ItemGroup>
+    <None Include="app.config" />
     <None Include="packages.config" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />

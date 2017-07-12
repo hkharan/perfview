@@ -1125,7 +1125,7 @@ public class GCHeapDumper
         }
 
         ulong totalGCSize = m_dotNetHeap.TotalHeapSize;
-        if (MaxDumpCountK < 10)   // Having fewer than 10K is probably wrong.    
+        if (MaxDumpCountK != 0 && MaxDumpCountK < 10)   // Having fewer than 10K is probably wrong.    
             MaxDumpCountK = 10;
         m_log.WriteLine("{0,5:f1}s: Size of heap = {1:f3} GB", m_sw.Elapsed.TotalSeconds, ((double)totalGCSize) / 1000000000.0);
 
@@ -1247,7 +1247,7 @@ public class GCHeapDumper
                 string name = root.Name;
                 if (name == "RefCount handle")
                     name = "COM/WinRT Objects";
-                else if (name == "local var" || name.EndsWith("handle", StringComparison.OrdinalIgnoreCase))
+                else if (name == "local var" || name.EndsWith(" handle", StringComparison.OrdinalIgnoreCase))
                     name += "s";
                 MemoryNodeBuilder nodeToAddRootTo = dotNetRoot;
 
@@ -1271,7 +1271,7 @@ public class GCHeapDumper
                             }
 
                             // Create a CCW node that represents the COM object that has one child that points at the managed object.  
-                            var ccwNode = m_gcHeapDump.MemoryGraph.GetNodeIndex(comPtr);
+                            var ccwNode = m_gcHeapDump.MemoryGraph.GetNodeIndex(ccwInfo.Handle);
                             var typeName = "[CCW";
                             var targetType = m_dotNetHeap.GetObjectType(root.Object);
                             if (targetType != null)
@@ -1428,7 +1428,7 @@ public class GCHeapDumper
         m_gcHeapDump.MemoryGraph.AllowReading();
 
         var maxDumpCount = MaxDumpCountK * 1000;
-        if (maxDumpCount < m_gcHeapDump.MemoryGraph.NodeCount)
+        if (maxDumpCount != 0 && maxDumpCount < m_gcHeapDump.MemoryGraph.NodeCount)
         {
             m_log.WriteLine("Object count {0}K > MaxDumpCount = {1}K, sampling", m_gcHeapDump.MemoryGraph.NodeCount / 1000, MaxDumpCountK);
 
