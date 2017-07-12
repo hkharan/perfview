@@ -1443,6 +1443,7 @@ table {
                 // this request. Assuming this happens, the worst we will miss is delay between 
                 // this module end event to the next module start event and that should ideally be 
                 // less. Hence we don't need the else part for this condition
+                
             };
 
             iis.IISRequestNotificationEventsOpcode16 += delegate (IISRequestNotificationEventsResponseErrorStatus responseErrorStatusNotification)
@@ -1457,12 +1458,9 @@ table {
                     request.FailureDetails.ModuleName = responseErrorStatusNotification.ModuleName;
                     request.FailureDetails.ConfigExceptionInfo= responseErrorStatusNotification.ConfigExceptionInfo;
                     request.FailureDetails.Notification = (RequestNotification) responseErrorStatusNotification.Notification;
-
                 }
-
             };
            
-
             iis.IIS_TransOpcode35 += delegate (W3GeneralFlushResponseStart traceEvent)
             {
                 AddGenericStartEventToRequest(traceEvent.ThreadID, traceEvent.ContextId, "W3GeneralFlushResponse", traceEvent.TimeStampRelativeMSec);
@@ -1539,20 +1537,94 @@ table {
             writer.WriteLine("<LI> Failed Requests: {0}</LI>", m_Requests.Values.Count(x => x.StatusCode >= 400));
             writer.WriteLine("</UL>");
 
+            try
+            {
+                writer.WriteLine("<H3>HTTP Statistics Per Request URL</H3>");
+
+                writer.WriteLine("<Table Border=\"1\">");
+                writer.Write("<TR>");
+                writer.Write("<TH Align='Center' Title='This is the Request URL. '>Path</TH>");
+                writer.Write("<TH Align='Center' Title='All requests for this URL'>Total</TH>");
+                writer.Write("<TH Align='Center' Title='The number of requests that finished with a Success HTTP Status Code'>HTTP Status (200-206)</TH>");
+                writer.Write("<TH Align='Center' Title='The number of requests that finished with a Redirect HTTP Status Code'>HTTP Status (301-307)</TH>");
+                writer.Write("<TH Align='Center' Title='The number of requests that failed with a HTTP Client error'>HTTP Status (400-412)</TH>");
+                writer.Write("<TH Align='Center' Title='The number of requests that failed with a HTTP server error'>HTTP Status (>=500)</TH>");
+                writer.WriteLine("</TR>");
+
+                var httpStatisticsPerUrl = m_Requests.Values.GroupBy(n => n.Path.Split('?')[0]).Select(c => new { Path = c.Key, Total = c.Count(), Successful = c.Count(s => s.StatusCode <= 206), Redirect = c.Count(s => s.StatusCode >= 301 && s.StatusCode <= 307), ClientError = c.Count(s => s.StatusCode >= 400 && s.StatusCode <= 412), ServerError = c.Count(s => s.StatusCode >= 500) });
+
+                // sort this list by the the maximum number of requests
+                foreach (var item in httpStatisticsPerUrl.OrderByDescending(x => x.Total))
+                {
+                    writer.WriteLine("<TR>");
+                    writer.Write($"<TD>{item.Path}</TD><TD>{item.Total}</TD><TD>{item.Successful}</TD><TD>{item.Redirect}</TD><TD>{item.ClientError}</TD><TD>{item.ServerError}</TD>");
+                    writer.Write("</TR>");
+                }
+                writer.WriteLine("</Table>");
+            }
+            catch (Exception e)
+            {
+                log.WriteLine(@"Error while displaying 'HTTP Statistics Per Request URL' " + "\r\n" + e.ToString());
+            }
+           
+
+            try
+            {
+                writer.WriteLine("<H3>HTTP Request Execution Statistics Per Request URL</H3>");
+
+                writer.WriteLine("<Table Border=\"1\">");
+                writer.Write("<TR>");
+                writer.Write("<TH Align='Center' Title='This is the Request URL.'>Path</TH>");
+                writer.Write("<TH Align='Center' Title='All requests for this URL'>Total</TH>");
+                writer.Write("<TH Align='Center' Title='The number of requests that finished in less than 1 second'> &lt; 1s </TH>");
+                writer.Write("<TH Align='Center' Title='The number of requests that finished in less than 5 seconds'>&lt; 5s</TH>");
+                writer.Write("<TH Align='Center' Title='The number of requests that finished in less than 15 seconds'>&lt; 15s</TH>");
+                writer.Write("<TH Align='Center' Title='The number of requests that finished in less than 30 seconds'>&lt; 30s</TH>");
+                writer.Write("<TH Align='Center' Title='The number of requests that finished in less than 60 seconds'>&lt; 60s</TH>");
+                writer.Write("<TH Align='Center' Title='The number of requests that finished in more than 60 seconds'>&gt; 60s</TH>");
+                writer.WriteLine("</TR>");
+
+                var httpRequestExecutionPerUrl = m_Requests.Values.GroupBy(n => n.Path.Split('?')[0]).Select(c => new {
+                    Path = c.Key,
+                    Total = c.Count(),
+                    OneSec = c.Count(s => (s.EndTimeRelativeMSec - s.StartTimeRelativeMSec) < 1000),
+                    FiveSec = c.Count(s => (s.EndTimeRelativeMSec - s.StartTimeRelativeMSec) >= 1000 && (s.EndTimeRelativeMSec - s.StartTimeRelativeMSec) < 5000),
+                    FifteenSec = c.Count(s => (s.EndTimeRelativeMSec - s.StartTimeRelativeMSec) >= 5000 && (s.EndTimeRelativeMSec - s.StartTimeRelativeMSec) < 15000),
+                    ThirtySec = c.Count(s => (s.EndTimeRelativeMSec - s.StartTimeRelativeMSec) >= 15000 && (s.EndTimeRelativeMSec - s.StartTimeRelativeMSec) < 30000),
+                    SixtySec = c.Count(s => (s.EndTimeRelativeMSec - s.StartTimeRelativeMSec) >= 30000 && (s.EndTimeRelativeMSec - s.StartTimeRelativeMSec) < 60000),
+                    MoreThanSixtySec = c.Count(s => (s.EndTimeRelativeMSec - s.StartTimeRelativeMSec) > 60000)
+                });
+
+                // sort this list by the the maximum number of requests
+                foreach (var item in httpRequestExecutionPerUrl.OrderByDescending(x => x.Total))
+                {
+                    writer.WriteLine("<TR>");
+                    writer.Write($"<TD>{item.Path}</TD><TD>{item.Total}</TD><TD>{item.OneSec}</TD><TD>{item.FiveSec}</TD><TD>{item.FifteenSec}</TD><TD>{item.ThirtySec}</TD><TD>{item.SixtySec}</TD><TD>{item.MoreThanSixtySec}</TD>");
+                    writer.Write("</TR>");
+                }
+                writer.WriteLine("</Table>");
+            }
+            catch(Exception e)
+            {
+                log.WriteLine(@"Error while displaying 'HTTP Request Execution Statistics Per Request URL' " + "\r\n" + e.ToString());
+            }
+
+           
+            
             writer.WriteLine("<H3>Top 100 Slowest Request Statistics</H3>");
-            writer.WriteLine("The below table shows the top 100 slowest requests in this trace. Any request which takes more than 100 milliseconds is not displayed. Hover over column headings for explaination of columns.");
+            writer.WriteLine("The below table shows the top 100 slowest requests in this trace. Requests completing within 100 milliseconds are ignored. Hover over column headings for explaination of columns. <BR/><BR/>");
 
             writer.WriteLine("<Table Border=\"1\">");
             writer.Write("<TR>");
-            writer.Write("<TH Align='Center'>Method</TH>");
-            writer.Write("<TH Align='Center'>Path</TH>");
-            writer.Write("<TH Align='Center'>cs-bytes</TH>");
-            writer.Write("<TH Align='Center'>sc-bytes</TH>");            
-            writer.Write("<TH Align='Center'>HttpStatus</TH>");            
-            writer.Write("<TH Align='Center'>Duration(ms)</TH>");
-            writer.Write("<TH Align='Center'>SlowestModule</TH>");           
-            writer.Write("<TH Align='Center'>TimeSpentInSlowestModule(ms)</TH>");
-            writer.Write("<TH Align='Center'>%TimeSpentInSlowestModule</TH>");
+            writer.Write("<TH Align='Center' Title='This column represents the HTTP METHOD used to make the request'>Method</TH>");
+            writer.Write("<TH Align='Center' Title='This is the Request URL. Click on the individual requests to see all ETW events for that request.' >Path</TH>");
+            writer.Write("<TH Align='Center' Title='cs-bytes represents the total bytes sent by the client for this HTTP Request'>cs-bytes</TH>");
+            writer.Write("<TH Align='Center' Title='sc-bytes represents the total bytes that the server sent for the HTTP Response'>sc-bytes</TH>");            
+            writer.Write("<TH Align='Center' Title='The HTTP Status Code and Substatus code that server sent for this HTTP request'>HttpStatus</TH>");            
+            writer.Write("<TH Align='Center' Title='The total time it took to execute the request on the server'>Duration(ms)</TH>");
+            writer.Write("<TH Align='Center' Title='This is the slowest module in the IIS request processing pipeline. Click on the the slowest module to see user mode stack trace for the thread. Hyperlinks to open thread stack traces are added only if the starting thread and ending thread for the module are the same.'>Slowest Module</TH>");           
+            writer.Write("<TH Align='Center' Title='This represents the time spent in the slowest module (in milliseconds)'>Time Spent In Slowest Module(ms)</TH>");
+            writer.Write("<TH Align='Center' Title='This column gives you a percentage of time spent in the slowest module to the total time spent in request execution'>%Time Spent In Slowest Module</TH>");
             writer.WriteLine("</TR>");
 
            
@@ -1615,17 +1687,19 @@ table {
 
                 writer.WriteLine("<H2>Failed Requests</H2>");
 
+                writer.WriteLine("<BR/>The below table provides details of all the failed requests (requests with StatusCode >399) in the trace. <BR/>");
+
                 writer.WriteLine("<Table Border=\"1\">");
                 writer.Write("<TR>");
-                writer.Write("<TH Align='Center'>Method</TH>");
-                writer.Write("<TH Align='Center'>Path</TH>");
-                writer.Write("<TH Align='Center'>cs-bytes</TH>");
-                writer.Write("<TH Align='Center'>sc-bytes</TH>");
-                writer.Write("<TH Align='Center'>HttpStatus</TH>");
-                writer.Write("<TH Align='Center'>Reason</TH>");
-                writer.Write("<TH Align='Center'>ErrorCode</TH>");
-                writer.Write("<TH Align='Center'>FailingModuleName</TH>");                
-                writer.Write("<TH Align='Center'>Duration(ms)</TH>");
+                writer.Write("<TH Align='Center' Title='This column represents the HTTP METHOD used to make the request'>Method</TH>");
+                writer.Write("<TH Align='Center' Title='This is the Request URL' >Path</TH>");
+                writer.Write("<TH Align='Center' Title='cs-bytes represents the total bytes sent by the client for this HTTP Request'>cs-bytes</TH>");
+                writer.Write("<TH Align='Center' Title='sc-bytes represents the total bytes that the server sent for the HTTP Response'>sc-bytes</TH>");
+                writer.Write("<TH Align='Center' Title='The HTTP Status Code and Substatus code that server sent for this HTTP request'>HttpStatus</TH>");
+                writer.Write("<TH Align='Center' Title='A user-friendly description of the error code sent by the server'>Reason</TH>");
+                writer.Write("<TH Align='Center' Title='Additional error code that IIS generated for the failed request'>ErrorCode</TH>");
+                writer.Write("<TH Align='Center' Title='The module reponsible for setting the failed HTTP Status' >FailingModuleName</TH>");
+                writer.Write("<TH Align='Center' Title='The total time it took to execute the request on the server'>Duration(ms)</TH>");
                 writer.WriteLine("</TR>");
 
                 foreach (var request in m_Requests.Values.Where(x => x.FailureDetails != null))
