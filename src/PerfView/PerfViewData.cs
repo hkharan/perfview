@@ -1557,7 +1557,7 @@ table {
                 foreach (var item in httpStatisticsPerUrl.OrderByDescending(x => x.Total))
                 {
                     writer.WriteLine("<TR>");
-                    writer.Write($"<TD>{item.Path}</TD><TD>{item.Total}</TD><TD>{item.Successful}</TD><TD>{item.Redirect}</TD><TD>{item.ClientError}</TD><TD>{item.ServerError}</TD>");
+                    writer.Write($"<TD>{item.Path}</TD><TD Align='Center'>{item.Total}</TD><TD Align='Center'>{item.Successful}</TD><TD Align='Center'>{item.Redirect}</TD><TD Align='Center'>{item.ClientError}</TD><TD Align='Center'>{item.ServerError}</TD>");
                     writer.Write("</TR>");
                 }
                 writer.WriteLine("</Table>");
@@ -1599,7 +1599,7 @@ table {
                 foreach (var item in httpRequestExecutionPerUrl.OrderByDescending(x => x.Total))
                 {
                     writer.WriteLine("<TR>");
-                    writer.Write($"<TD>{item.Path}</TD><TD>{item.Total}</TD><TD>{item.OneSec}</TD><TD>{item.FiveSec}</TD><TD>{item.FifteenSec}</TD><TD>{item.ThirtySec}</TD><TD>{item.SixtySec}</TD><TD>{item.MoreThanSixtySec}</TD>");
+                    writer.Write($"<TD>{item.Path}</TD><TD Align='Center'>{item.Total}</TD><TD Align='Center'>{item.OneSec}</TD><TD Align='Center'>{item.FiveSec}</TD><TD Align='Center'>{item.FifteenSec}</TD><TD Align='Center'>{item.ThirtySec}</TD><TD Align='Center'>{item.SixtySec}</TD><TD Align='Center'>{item.MoreThanSixtySec}</TD>");
                     writer.Write("</TR>");
                 }
                 writer.WriteLine("</Table>");
