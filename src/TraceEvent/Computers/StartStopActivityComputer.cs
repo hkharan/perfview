@@ -10,7 +10,6 @@ using Microsoft.Diagnostics.Tracing.Parsers;
 using Microsoft.Diagnostics.Tracing.Parsers.ApplicationServer;
 using Microsoft.Diagnostics.Tracing.Parsers.AspNet;
 using Microsoft.Diagnostics.Tracing.Parsers.Clr;
-using Microsoft.Diagnostics.Tracing.Parsers.IIS_Trace;
 using Microsoft.Diagnostics.Tracing.Parsers.Kernel;
 using Microsoft.Diagnostics.Tracing.Session;
 using Microsoft.Diagnostics.Tracing.Stacks;
@@ -37,10 +36,6 @@ namespace Microsoft.Diagnostics.Tracing
         /// </summary>
         public StartStopActivityComputer(TraceLogEventSource source, ActivityComputer taskComputer)
         {
-
-            int intStartEvents = 0;
-            int intStopEvents = 0;
-
             taskComputer.NoCache = true;            // Can't cache start-stops (at the moment)
             m_source = source;
             m_activeStartStopActivities = new Dictionary<StartStopKey, StartStopActivity>();
@@ -85,50 +80,28 @@ namespace Microsoft.Diagnostics.Tracing
                 // Special case IIS.  It does not use start and stop opcodes (Ugg), but otherwise 
                 // follows normal start-stop activity ID conventions.   We also want it to work even
                 // though it is not a EventSource.  
-
-                //if (data.ID <= (TraceEventID)2 && data.ProviderGuid == MicrosoftWindowsIISProvider)
-                //{
-                //    if (data.ID == (TraceEventID)1)
-                //    {
-                //        // TODO HACK.  We have seen IIS Start and stop events that only have a 
-                //        // context ID and no more.  They also seem to be some sort of nested event
-                //        // It really looks like a bug that they were emitted.  Ignore them. 
-                //        if (16 < data.EventDataLength)
-                //        {
-                //            string extraStartInfo = data.PayloadByName("RequestURL") as string;
-                //            OnStart(data, extraStartInfo, null, null, null, "IISRequest");
-                //        }
-                //    }
-                //    else if (data.ID == (TraceEventID)2)
-                //    {
-                //        // TODO HACK.  We have seen IIS Start and stop events that only have a 
-                //        // context ID and no more.  They also seem to be some sort of nested event
-                //        // It really looks like a bug that they were emitted.  Ignore them.
-                //        if (16 < data.EventDataLength)
-                //            OnStop(data);
-                //    }
-                //}
-
-
-
-                if (data.providerGuid == IisTraceEventParser.ProviderGuid)
+                if (data.ID <= (TraceEventID)2 && data.ProviderGuid == MicrosoftWindowsIISProvider)
                 {
-                    if (data.Opcode == TraceEventOpcode.Start && data.taskGuid == IisTraceEventParser.IISTransGuid && data.OpcodeName == "GENERAL_REQUEST_START")
+                    if (data.ID == (TraceEventID)1)
                     {
-                        string extraStartInfo = data.PayloadByName("RequestURL") as string;
-                        StartStopKey startKey = Guid.Parse(data.PayloadByName("ContextId").ToString());
-                        OnStart(data, extraStartInfo, &startKey, null, null, "IISGeneralRequest");
-                        intStartEvents++;
+                        // TODO HACK.  We have seen IIS Start and stop events that only have a 
+                        // context ID and no more.  They also seem to be some sort of nested event
+                        // It really looks like a bug that they were emitted.  Ignore them. 
+                        if (16 < data.EventDataLength)
+                        {
+                            string extraStartInfo = data.PayloadByName("RequestURL") as string;
+                            OnStart(data, extraStartInfo, null, null, null, "IISRequest");
+                        }
                     }
-                    else if (data.Opcode == TraceEventOpcode.Stop && data.taskGuid == IisTraceEventParser.IISTransGuid && data.OpcodeName == "GENERAL_REQUEST_END")
+                    else if (data.ID == (TraceEventID)2)
                     {
-                        StartStopKey stopKey = Guid.Parse(data.PayloadByName("ContextId").ToString());
-                        OnStop(data,&stopKey);
-                        intStopEvents++;
+                        // TODO HACK.  We have seen IIS Start and stop events that only have a 
+                        // context ID and no more.  They also seem to be some sort of nested event
+                        // It really looks like a bug that they were emitted.  Ignore them.
+                        if (16 < data.EventDataLength)
+                            OnStop(data);
                     }
                 }
-
-
 #if HTTP_SERVICE_EVENTS
                 else if (data.Task == (TraceEventTask)1 && data.ProviderGuid == MicrosoftWindowsHttpService)
                 {
@@ -279,115 +252,115 @@ namespace Microsoft.Diagnostics.Tracing
                 OnStop(data);
             };
 
-            //var aspNetParser = new AspNetTraceEventParser(m_source);
-            //aspNetParser.AspNetReqStart += delegate (AspNetStartTraceData data)
-            //{
-            //    // if the related activity is not present, try using the context ID as the creator ID to look up.   
-            //    // The ASPNet events reuse the IIS ID which means first stop kills both.   As it turns out
-            //    // IIS stops before ASP (also incorrect) but it mostly this is benign...  
-            //    StartStopActivity creator = null;
-            //    if (data.RelatedActivityID == Guid.Empty)
-            //        creator = GetActiveStartStopActivityTable(data.ContextId, data.ProcessID);
+            var aspNetParser = new AspNetTraceEventParser(m_source);
+            aspNetParser.AspNetReqStart += delegate (AspNetStartTraceData data)
+            {
+                // if the related activity is not present, try using the context ID as the creator ID to look up.   
+                // The ASPNet events reuse the IIS ID which means first stop kills both.   As it turns out
+                // IIS stops before ASP (also incorrect) but it mostly this is benign...  
+                StartStopActivity creator = null;
+                if (data.RelatedActivityID == Guid.Empty)
+                    creator = GetActiveStartStopActivityTable(data.ContextId, data.ProcessID);
 
-            //    Guid activityId = data.ContextId;
-            //    OnStart(data, data.Path, &activityId, null, creator);
-            //};
-            //aspNetParser.AspNetReqStop += delegate (AspNetStopTraceData data)
-            //{
-            //    Guid activityId = data.ContextId;
-            //    OnStop(data, &activityId);
-            //};
-            //// There are other ASP.NET events that have context information and this is useful
-            //aspNetParser.AspNetReqStartHandler += delegate (AspNetStartHandlerTraceData data)
-            //{
-            //    SetThreadToStartStopActivity(data, data.ContextId);
-            //};
-            //aspNetParser.AspNetReqPipelineModuleEnter += delegate (AspNetPipelineModuleEnterTraceData data)
-            //{
-            //    SetThreadToStartStopActivity(data, data.ContextId);
-            //};
-            //aspNetParser.AspNetReqGetAppDomainEnter += delegate (AspNetGetAppDomainEnterTraceData data)
-            //{
-            //    SetThreadToStartStopActivity(data, data.ContextId);
-            //};
+                Guid activityId = data.ContextId;
+                OnStart(data, data.Path, &activityId, null, creator);
+            };
+            aspNetParser.AspNetReqStop += delegate (AspNetStopTraceData data)
+            {
+                Guid activityId = data.ContextId;
+                OnStop(data, &activityId);
+            };
+            // There are other ASP.NET events that have context information and this is useful
+            aspNetParser.AspNetReqStartHandler += delegate (AspNetStartHandlerTraceData data)
+            {
+                SetThreadToStartStopActivity(data, data.ContextId);
+            };
+            aspNetParser.AspNetReqPipelineModuleEnter += delegate (AspNetPipelineModuleEnterTraceData data)
+            {
+                SetThreadToStartStopActivity(data, data.ContextId);
+            };
+            aspNetParser.AspNetReqGetAppDomainEnter += delegate (AspNetGetAppDomainEnterTraceData data)
+            {
+                SetThreadToStartStopActivity(data, data.ContextId);
+            };
 
-            //// These are probably not important, but they may help.  
-            //aspNetParser.AspNetReqRoleManagerBegin += delegate (AspNetRoleManagerBeginTraceData data)
-            //{
-            //    SetThreadToStartStopActivity(data, data.ContextId);
-            //};
-            //aspNetParser.AspNetReqRoleManagerGetUserRoles += delegate (AspNetRoleManagerGetUserRolesTraceData data)
-            //{
-            //    SetThreadToStartStopActivity(data, data.ContextId);
-            //};
-            //aspNetParser.AspNetReqRoleManagerEnd += delegate (AspNetRoleManagerEndTraceData data)
-            //{
-            //    SetThreadToStartStopActivity(data, data.ContextId);
-            //};
-            //aspNetParser.AspNetReqMapHandlerEnter += delegate (AspNetMapHandlerEnterTraceData data)
-            //{
-            //    SetThreadToStartStopActivity(data, data.ContextId);
-            //};
-            //aspNetParser.AspNetReqMapHandlerLeave += delegate (AspNetMapHandlerLeaveTraceData data)
-            //{
-            //    SetThreadToStartStopActivity(data, data.ContextId);
-            //};
-            //aspNetParser.AspNetReqHttpHandlerEnter += delegate (AspNetHttpHandlerEnterTraceData data)
-            //{
-            //    SetThreadToStartStopActivity(data, data.ContextId);
-            //};
-            //aspNetParser.AspNetReqHttpHandlerLeave += delegate (AspNetHttpHandlerLeaveTraceData data)
-            //{
-            //    SetThreadToStartStopActivity(data, data.ContextId);
-            //};
-            //aspNetParser.AspNetReqPagePreInitEnter += delegate (AspNetPagePreInitEnterTraceData data)
-            //{
-            //    SetThreadToStartStopActivity(data, data.ContextId);
-            //};
-            //aspNetParser.AspNetReqPagePreInitLeave += delegate (AspNetPagePreInitLeaveTraceData data)
-            //{
-            //    SetThreadToStartStopActivity(data, data.ContextId);
-            //};
-            //aspNetParser.AspNetReqPageInitEnter += delegate (AspNetPageInitEnterTraceData data)
-            //{
-            //    SetThreadToStartStopActivity(data, data.ContextId);
-            //};
-            //aspNetParser.AspNetReqPageInitLeave += delegate (AspNetPageInitLeaveTraceData data)
-            //{
-            //    SetThreadToStartStopActivity(data, data.ContextId);
-            //};
-            //aspNetParser.AspNetReqPageLoadEnter += delegate (AspNetPageLoadEnterTraceData data)
-            //{
-            //    SetThreadToStartStopActivity(data, data.ContextId);
-            //};
-            //aspNetParser.AspNetReqPageLoadLeave += delegate (AspNetPageLoadLeaveTraceData data)
-            //{
-            //    SetThreadToStartStopActivity(data, data.ContextId);
-            //};
-            //aspNetParser.AspNetReqPagePreRenderEnter += delegate (AspNetPagePreRenderEnterTraceData data)
-            //{
-            //    SetThreadToStartStopActivity(data, data.ContextId);
-            //};
-            //aspNetParser.AspNetReqPagePreRenderLeave += delegate (AspNetPagePreRenderLeaveTraceData data)
-            //{
-            //    SetThreadToStartStopActivity(data, data.ContextId);
-            //};
-            //aspNetParser.AspNetReqPageSaveViewstateEnter += delegate (AspNetPageSaveViewstateEnterTraceData data)
-            //{
-            //    SetThreadToStartStopActivity(data, data.ContextId);
-            //};
-            //aspNetParser.AspNetReqPageSaveViewstateLeave += delegate (AspNetPageSaveViewstateLeaveTraceData data)
-            //{
-            //    SetThreadToStartStopActivity(data, data.ContextId);
-            //};
-            //aspNetParser.AspNetReqPageRenderEnter += delegate (AspNetPageRenderEnterTraceData data)
-            //{
-            //    SetThreadToStartStopActivity(data, data.ContextId);
-            //};
-            //aspNetParser.AspNetReqPageRenderLeave += delegate (AspNetPageRenderLeaveTraceData data)
-            //{
-            //    SetThreadToStartStopActivity(data, data.ContextId);
-            //};
+            // These are probably not important, but they may help.  
+            aspNetParser.AspNetReqRoleManagerBegin += delegate (AspNetRoleManagerBeginTraceData data)
+            {
+                SetThreadToStartStopActivity(data, data.ContextId);
+            };
+            aspNetParser.AspNetReqRoleManagerGetUserRoles += delegate (AspNetRoleManagerGetUserRolesTraceData data)
+            {
+                SetThreadToStartStopActivity(data, data.ContextId);
+            };
+            aspNetParser.AspNetReqRoleManagerEnd += delegate (AspNetRoleManagerEndTraceData data)
+            {
+                SetThreadToStartStopActivity(data, data.ContextId);
+            };
+            aspNetParser.AspNetReqMapHandlerEnter += delegate (AspNetMapHandlerEnterTraceData data)
+            {
+                SetThreadToStartStopActivity(data, data.ContextId);
+            };
+            aspNetParser.AspNetReqMapHandlerLeave += delegate (AspNetMapHandlerLeaveTraceData data)
+            {
+                SetThreadToStartStopActivity(data, data.ContextId);
+            };
+            aspNetParser.AspNetReqHttpHandlerEnter += delegate (AspNetHttpHandlerEnterTraceData data)
+            {
+                SetThreadToStartStopActivity(data, data.ContextId);
+            };
+            aspNetParser.AspNetReqHttpHandlerLeave += delegate (AspNetHttpHandlerLeaveTraceData data)
+            {
+                SetThreadToStartStopActivity(data, data.ContextId);
+            };
+            aspNetParser.AspNetReqPagePreInitEnter += delegate (AspNetPagePreInitEnterTraceData data)
+            {
+                SetThreadToStartStopActivity(data, data.ContextId);
+            };
+            aspNetParser.AspNetReqPagePreInitLeave += delegate (AspNetPagePreInitLeaveTraceData data)
+            {
+                SetThreadToStartStopActivity(data, data.ContextId);
+            };
+            aspNetParser.AspNetReqPageInitEnter += delegate (AspNetPageInitEnterTraceData data)
+            {
+                SetThreadToStartStopActivity(data, data.ContextId);
+            };
+            aspNetParser.AspNetReqPageInitLeave += delegate (AspNetPageInitLeaveTraceData data)
+            {
+                SetThreadToStartStopActivity(data, data.ContextId);
+            };
+            aspNetParser.AspNetReqPageLoadEnter += delegate (AspNetPageLoadEnterTraceData data)
+            {
+                SetThreadToStartStopActivity(data, data.ContextId);
+            };
+            aspNetParser.AspNetReqPageLoadLeave += delegate (AspNetPageLoadLeaveTraceData data)
+            {
+                SetThreadToStartStopActivity(data, data.ContextId);
+            };
+            aspNetParser.AspNetReqPagePreRenderEnter += delegate (AspNetPagePreRenderEnterTraceData data)
+            {
+                SetThreadToStartStopActivity(data, data.ContextId);
+            };
+            aspNetParser.AspNetReqPagePreRenderLeave += delegate (AspNetPagePreRenderLeaveTraceData data)
+            {
+                SetThreadToStartStopActivity(data, data.ContextId);
+            };
+            aspNetParser.AspNetReqPageSaveViewstateEnter += delegate (AspNetPageSaveViewstateEnterTraceData data)
+            {
+                SetThreadToStartStopActivity(data, data.ContextId);
+            };
+            aspNetParser.AspNetReqPageSaveViewstateLeave += delegate (AspNetPageSaveViewstateLeaveTraceData data)
+            {
+                SetThreadToStartStopActivity(data, data.ContextId);
+            };
+            aspNetParser.AspNetReqPageRenderEnter += delegate (AspNetPageRenderEnterTraceData data)
+            {
+                SetThreadToStartStopActivity(data, data.ContextId);
+            };
+            aspNetParser.AspNetReqPageRenderLeave += delegate (AspNetPageRenderLeaveTraceData data)
+            {
+                SetThreadToStartStopActivity(data, data.ContextId);
+            };
 
             var WCFParser = new ApplicationServerTraceEventParser(m_source);
 
